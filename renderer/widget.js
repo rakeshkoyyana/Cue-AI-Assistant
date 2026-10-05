@@ -5,13 +5,59 @@ if (MODE === 'widget') (() => {
   let liveCleanup = null;
 
   cue.settings.get().then((s) => (S = s));
+
+  // ---------- Hide: collapse the whole widget into a small floating logo; click it to restore ----------
+  const bub = document.createElement('div'); bub.id = 'bub';
+  bub.innerHTML = '<button id="bubLogo" title="Show Cue">●</button><button id="bubX" title="Close Cue">✕</button>';
+  document.body.appendChild(bub);
+  function hide() { document.body.classList.add('bubble'); cue.win.bubble(true); }
+  function restore() { document.body.classList.remove('bubble'); cue.win.bubble(false); }
+  $('#bubLogo').onclick = restore;
+  $('#bubX').onclick = () => { if (!liveCleanup || confirm('A session is running. Close Cue?')) cue.win.close(); };
+
+  // ---------- Resume / document picker (dropdown with Refresh + Upload, opens upward when near the bottom) ----------
+  const docNames = {};
+  const pickerLabel = (kind) => (kind === 'resume' ? docNames[draft.resumeId] || 'Select a resume…' : draft.docIds.length ? `${draft.docIds.length} selected` : 'Select documents');
+  function openPicker(anchor, kind) {
+    $$('.menu').forEach((x) => x.remove());
+    const multi = kind === 'document';
+    const m = document.createElement('div'); m.className = 'menu pick'; document.body.appendChild(m);
+    const off = (e) => { if (!m.contains(e.target) && e.target !== anchor) close(); };
+    const close = () => { m.remove(); document.removeEventListener('mousedown', off, true); };
+    setTimeout(() => document.addEventListener('mousedown', off, true));
+    const place = () => {
+      const r = anchor.getBoundingClientRect(); m.style.width = Math.max(r.width, 240) + 'px'; m.style.left = Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8)) + 'px';
+      const h = m.offsetHeight; m.style.top = (r.bottom + h + 10 > innerHeight ? Math.max(8, r.top - h - 6) : r.bottom + 6) + 'px';
+    };
+    const draw = async () => {
+      const items = (await cue.docs.list()).filter((d) => d.kind === kind); items.forEach((d) => (docNames[d.id] = d.name));
+      const sel = multi ? draft.docIds : [draft.resumeId];
+      m.innerHTML = `<div class="plist">${items.map((d) => `<div class="it" data-id="${d.id}">${multi ? `<input type="checkbox" style="width:auto" ${sel.includes(d.id) ? 'checked' : ''}>` : ''}<span class="grow" style="word-break:break-word">${esc(d.name)}</span>${!multi && sel[0] === d.id ? '✓' : ''}</div>`).join('') || `<div class="it mute">No ${multi ? 'documents' : 'resumes'} yet</div>`}</div><div class="sep"></div>
+        <div class="it" data-a="refresh">↻ Refresh ${multi ? 'documents' : 'resumes'}</div><div class="it" data-a="upload">＋ Upload a ${multi ? 'document' : 'resume'}</div>`;
+      place();
+    };
+    m.onclick = async (e) => {
+      const row = e.target.closest('.it'); if (!row) return;
+      if (row.dataset.a === 'refresh') { await draw(); toast('Refreshed', 900); return; }
+      if (row.dataset.a === 'upload') {
+        const r = await cue.docs.importFiles(kind); r.filter((x) => x.error).forEach((x) => toast(x.error, 5000));
+        r.filter((x) => x.id).forEach((x) => { docNames[x.id] = x.name; if (multi) draft.docIds.push(x.id); else draft.resumeId = x.id; });
+        anchor.firstChild.textContent = pickerLabel(kind); await draw(); if (!multi && r.some((x) => x.id)) close(); return;
+      }
+      const id = row.dataset.id; if (!id) return;
+      if (multi) { draft.docIds = draft.docIds.includes(id) ? draft.docIds.filter((x) => x !== id) : [...draft.docIds, id]; await draw(); }
+      else { draft.resumeId = draft.resumeId === id ? '' : id; close(); }
+      anchor.firstChild.textContent = pickerLabel(kind);
+    };
+    draw();
+  }
   cue.onGotoLive((sid) => (sid === '__new' ? viewWizard() : viewConnect(sid)));
 
   // ---------------- shell + header ----------------
   const shell = (inner, cls = '') => `<div class="shell ${cls}"><div class="hdr"><div class="brand"><span class="logo"></span>Cue</div>
-    <button class="ib nodrag" title="Self-hosted: unlimited usage">∞</button><button class="ib" id="hCollapse" title="Collapse">⤡</button><button class="ib" title="Drag to move">✥</button><button class="ib" id="hMenu">⋮</button><button class="ib close" id="hClose">✕</button></div>${inner}</div>`;
+    <button class="ib" title="Self-hosted: unlimited usage">∞</button><button class="ib" id="hCollapse" title="Hide">⤡</button><button class="ib mv" title="Move (⌘ + ⇧ + ✥)  ·  drag me, or use ⌘⇧ + arrow keys during a live session">✥</button><button class="ib" id="hMenu" title="Menu">⋮</button><button class="ib close" id="hClose" title="Close">✕</button></div>${inner}</div>`;
   function bindHeader() {
-    $('#hCollapse').onclick = () => cue.win.collapse();
+    $('#hCollapse').onclick = hide;
     $('#hClose').onclick = () => cue.win.close();
     $('#hMenu').onclick = (e) => kebab(e.currentTarget);
   }
@@ -81,13 +127,14 @@ if (MODE === 'widget') (() => {
     const side = `<div class="side"><h2>Create Session</h2><p>Enter the details & select what you need for this call.</p><div class="step ${step === 1 ? 'on' : ''}"><b>1</b>Details</div><div class="step ${step === 2 ? 'on' : ''}"><b>2</b>Preferences</div></div>`;
     let main;
     if (step === 1) {
-      const docDD = `<details class="dd"><summary>${draft.docIds.length ? draft.docIds.length + ' selected' : 'Select documents'}</summary><div class="opts">${others.map((d) => `<label><input type="checkbox" data-doc="${d.id}" ${draft.docIds.includes(d.id) ? 'checked' : ''}/>${esc(d.name)}</label>`).join('') || '<span class="mute">No documents yet</span>'}<button class="btn ghost sm" id="upDoc" style="margin-top:6px">Upload…</button></div></details>`;
+      docs.forEach((d) => (docNames[d.id] = d.name));
+      const docDD = `<button class="ddbtn" id="docBtn"><span>${esc(pickerLabel('document'))}</span><i>⌄</i></button>`;
       main = `<div class="tabs2"><button data-type="interview" class="${draft.type === 'interview' ? 'on' : ''}">💼 Interview</button><button data-type="regular" class="${draft.type === 'regular' ? 'on' : ''}">📞 Regular</button></div>` +
         (draft.type === 'interview' ? `<p class="mute">Have a link to the job post? Import the details automatically.</p><button class="btn ghost" id="imp">✨ Paste a job link</button><div class="row" id="impRow" style="display:none;margin-top:8px"><input id="impUrl" placeholder="https://…" /><button class="btn sm" id="impGo">Import</button></div>
           <label class="lbl">Company</label><input id="company" placeholder="Enter company name" value="${esc(draft.company)}" />
           <label class="lbl">Role <small>(Optional)</small></label><input id="role" placeholder="e.g. Data Engineer" value="${esc(draft.role)}" />
           <label class="lbl">Job Description</label><textarea id="jd" placeholder="Enter job description">${esc(draft.jobDescription)}</textarea>
-          <div class="sechd">Context</div><div class="row" style="align-items:flex-start"><div class="grow"><label class="lbl">CV / Resume</label><select id="resume"><option value="">Select a resume…</option>${resumes.map((d) => `<option value="${d.id}" ${draft.resumeId === d.id ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}</select><button class="btn ghost sm" id="upRes" style="margin-top:6px">Upload resume…</button></div><div class="grow"><label class="lbl">Documents</label>${docDD}</div></div>`
+          <div class="sechd">Context</div><div class="row" style="align-items:flex-start"><div class="grow"><label class="lbl">CV / Resume</label><button class="ddbtn" id="resumeBtn"><span>${esc(pickerLabel('resume'))}</span><i>⌄</i></button></div><div class="grow"><label class="lbl">Documents</label>${docDD}</div></div>`
         : `<label class="lbl">Call Title <small>(Optional)</small></label><input id="title" placeholder="Enter call title" value="${esc(draft.title)}" />
           <label class="lbl">Description <small>(Optional)</small></label><textarea id="desc" placeholder="Enter description">${esc(draft.description)}</textarea>
           <div class="sechd">Context</div><label class="lbl">Documents</label>${docDD}
@@ -108,18 +155,16 @@ if (MODE === 'widget') (() => {
 
     const grab = () => {
       if (step !== 1) return;
-      if (draft.type === 'interview') { draft.company = $('#company').value; draft.role = $('#role').value; draft.jobDescription = $('#jd').value; draft.resumeId = $('#resume').value; }
+      if (draft.type === 'interview') { draft.company = $('#company').value; draft.role = $('#role').value; draft.jobDescription = $('#jd').value; }
       else { draft.title = $('#title').value; draft.description = $('#desc').value; }
-      draft.docIds = $$('[data-doc]').filter((c) => c.checked).map((c) => c.dataset.doc);
     };
-    const upload = async (kind) => { grab(); const r = await cue.docs.importFiles(kind); r.filter((x) => x.error).forEach((x) => toast(x.error, 5000)); const ok = r.filter((x) => x.id); if (ok.length) { if (kind === 'resume') draft.resumeId = ok[0].id; else draft.docIds.push(...ok.map((x) => x.id)); } viewWizard(1); };
 
     if (step === 1) {
       $$('.tabs2 button').forEach((b) => (b.onclick = () => { grab(); draft.type = b.dataset.type; viewWizard(1); }));
       $('#cancel').onclick = () => { draft = null; viewList(); };
-      if ($('#upDoc')) $('#upDoc').onclick = () => upload('document');
+      $('#docBtn').onclick = (e) => openPicker(e.currentTarget, 'document');
       if (draft.type === 'interview') {
-        $('#upRes').onclick = () => upload('resume');
+        $('#resumeBtn').onclick = (e) => openPicker(e.currentTarget, 'resume');
         $('#imp').onclick = () => { $('#impRow').style.display = 'flex'; $('#impUrl').focus(); };
         $('#impGo').onclick = async () => {
           const url = $('#impUrl').value.trim(); if (!url) return; $('#impGo').disabled = true; $('#impGo').textContent = 'Importing…';
@@ -175,7 +220,7 @@ if (MODE === 'widget') (() => {
     app.innerHTML = `<div class="shell live"><div class="lbar"><div class="dev"><span id="dMic" title="Microphone">🎤</span><span id="dSys" title="System audio">🔊</span></div>
       <button class="lbtn" id="bAns">Answer<kbd>⌘↵</kbd></button><button class="lbtn" id="bShot">Screenshot<kbd>⌘⇧↵</kbd></button><button class="lbtn" id="bChat">Chat<kbd>⌘⇧␣</kbd></button>
       ${s.type === 'mock' ? '<button class="lbtn" id="bNext">Next question</button>' : ''}<div class="grow"></div>
-      <button class="lbtn sq" id="lMove" title="Drag to move">✥</button><button class="lbtn sq" id="lCollapse">⤡</button><button class="lbtn sq" id="lMenu">⋮</button><button class="timer" id="timer" title="End session">0:00</button></div>
+      <button class="lbtn sq mv" id="lMove" title="Move (⌘ + ⇧ + ✥)  ·  drag me, or use ⌘⇧ + arrow keys">✥</button><button class="lbtn sq" id="lCollapse" title="Hide">⤡</button><button class="lbtn sq" id="lMenu">⋮</button><button class="timer" id="timer" title="End session">0:00</button></div>
       <div class="lstat"><div class="wave"><i></i><i></i><i></i></div><div class="txt" id="ltxt">Connecting…</div><button class="lbtn" id="bClearTx">Clear<kbd>⌘⇧⌫</kbd></button></div>
       <div class="apanel" id="panel" style="display:none"></div></div>`;
 
@@ -250,7 +295,7 @@ if (MODE === 'widget') (() => {
     const clearTx = () => { lines.length = 0; for (const k in interim) delete interim[k]; pendingQ = []; persist(); setStatus('Listening…'); };
 
     $('#bAns').onclick = () => ask({}); $('#bShot').onclick = shot; $('#bChat').onclick = openChat; $('#bClearTx').onclick = clearTx;
-    $('#lCollapse').onclick = () => cue.win.collapse();
+    $('#lCollapse').onclick = hide;
     $('#lMenu').onclick = (e) => popMenu(e.currentTarget, `<div class="it" data-a="sum"><span class="grow">Summarize session</span></div><div class="it" data-a="dash"><span class="grow">Dashboard ↗</span></div><div class="it" data-a="screen"><span class="grow">Next Screen</span>→</div>
       <div class="it"><span class="grow">Opacity</span><input type="range" min="40" max="100" value="100" id="op" style="width:90px;padding:0"></div><div class="it" data-a="end"><span class="grow">End session</span></div>`, (m, close) => {
       $('#op', m).oninput = (ev) => cue.win.opacity(ev.target.value / 100);

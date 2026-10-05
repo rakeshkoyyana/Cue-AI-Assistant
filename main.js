@@ -224,6 +224,13 @@ function registerIpc() {
   // window control
   ipcMain.handle('win:size', (e, w, h) => { const win = winOf(e); collapsed = null; win.setResizable(true); win.setSize(Math.round(w), Math.round(h), true); });
   ipcMain.handle('win:collapse', (e) => { const win = winOf(e); if (collapsed) { win.setSize(...collapsed, true); collapsed = null; } else { collapsed = win.getSize(); win.setSize(collapsed[0], 72, true); } return !!collapsed; });
+  // Hide: shrink the widget to a small floating bubble (and back), keeping its position
+  let prevBounds = null;
+  ipcMain.handle('win:bubble', (e, on) => {
+    const win = winOf(e);
+    if (on) { prevBounds = win.getBounds(); win.setMinimumSize(1, 1); win.setBounds({ x: prevBounds.x, y: prevBounds.y, width: 120, height: 64 }, true); win.setOpacity(1); }
+    else if (prevBounds) { win.setMinimumSize(380, 72); win.setBounds(prevBounds, true); prevBounds = null; }
+  });
   ipcMain.handle('win:nextScreen', (e) => {
     const win = winOf(e); const ds = screen.getAllDisplays(); const cur = screen.getDisplayMatching(win.getBounds());
     const next = ds[(ds.findIndex((d) => d.id === cur.id) + 1) % ds.length]; win.setPosition(next.bounds.x + 40, next.bounds.y + 40);
@@ -237,11 +244,18 @@ function registerIpc() {
 }
 
 // ---------- hotkeys ----------
+const MOVE_STEP = 40;
+const MOVE_KEYS = { 'CommandOrControl+Shift+Left': [-1, 0], 'CommandOrControl+Shift+Right': [1, 0], 'CommandOrControl+Shift+Up': [0, -1], 'CommandOrControl+Shift+Down': [0, 1] };
 const LIVE_KEYS = { 'CommandOrControl+Return': 'answer', 'CommandOrControl+Shift+Return': 'screenshot', 'CommandOrControl+Shift+Space': 'chat', 'CommandOrControl+Shift+Backspace': 'clear' };
 function setLiveHotkeys(on) {
   for (const [acc, name] of Object.entries(LIVE_KEYS)) {
     if (globalShortcut.isRegistered(acc)) globalShortcut.unregister(acc);
     if (on) globalShortcut.register(acc, () => send(widget, 'hotkey', name));
+  }
+  // Move (⌘ + ⇧ + arrows): nudge the overlay without touching the mouse
+  for (const [acc, [dx, dy]] of Object.entries(MOVE_KEYS)) {
+    if (globalShortcut.isRegistered(acc)) globalShortcut.unregister(acc);
+    if (on) globalShortcut.register(acc, () => { if (!widget) return; const [x, y] = widget.getPosition(); widget.setPosition(x + dx * MOVE_STEP, y + dy * MOVE_STEP); });
   }
 }
 

@@ -102,3 +102,15 @@ kbd { font:inherit; font-size:11px; opacity:.7; margin-left:6px; }
 .sb .brand { flex:none; }
 .wizfoot { position:sticky; bottom:0; background:var(--glass); padding:10px 0 4px; margin-top:auto; }
 .wiz .main { padding-bottom:0; }
+
+.ib.mv, .lbtn.mv { -webkit-app-region:drag; cursor:grab; }
+.ddbtn { width:100%; display:flex; align-items:center; justify-content:space-between; gap:8px; background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:10px; padding:9px 12px; text-align:left; }
+.ddbtn span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .ddbtn i { font-style:normal; color:var(--mute); }
+.menu.pick { padding:6px; } .menu.pick .plist { max-height:260px; overflow:auto; }
+#bub { display:none; }
+body.bubble .shell { display:none; }
+body.bubble #bub { display:flex; align-items:center; gap:8px; height:100vh; padding:6px 8px; background:var(--glass); border:1px solid var(--line); border-radius:22px; }
+#bub button { border:0; cursor:pointer; -webkit-app-region:no-drag; }
+#bubLogo { width:46px; height:46px; border-radius:50%; background:var(--accent); color:#fff; font-size:20px; }
+#bubX { width:30px; height:30px; border-radius:10px; background:var(--panel2); color:#d9822b; font-weight:700; }
+body.bubble { -webkit-app-region:drag; }

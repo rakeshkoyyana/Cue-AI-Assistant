@@ -20,7 +20,7 @@ contextBridge.exposeInMainWorld('cue', {
   capture: { screenshot: () => inv('capture:screenshot') },
   deepgramKey: () => inv('deepgram:key'),
   win: {
-    size: (w, h) => inv('win:size', w, h), collapse: () => inv('win:collapse'), nextScreen: () => inv('win:nextScreen'), zoom: (d) => inv('win:zoom', d),
+    size: (w, h) => inv('win:size', w, h), collapse: () => inv('win:collapse'), bubble: (on) => inv('win:bubble', on), nextScreen: () => inv('win:nextScreen'), zoom: (d) => inv('win:zoom', d),
     close: () => inv('win:close'), opacity: (v) => inv('win:opacity', v), openDashboard: (hash) => inv('dashboard:open', hash),
     startSession: (id) => inv('widget:startSession', id), liveHotkeys: (on) => inv('hotkeys:live', on),
   },

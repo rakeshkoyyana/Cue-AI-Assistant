@@ -1,0 +1,24 @@
+{
+  "name": "cue",
+  "version": "0.1.0",
+  "description": "Cue — a private, self-hosted AI copilot for interviews and meetings",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.60.0",
+    "mammoth": "^1.8.0",
+    "pdf-parse": "^1.1.1"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.rakesh.cue",
+    "productName": "Cue",
+    "files": ["main.js", "preload.js", "renderer/**/*", "package.json"]
+  }
+}

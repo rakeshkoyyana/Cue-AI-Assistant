@@ -223,8 +223,8 @@ if (MODE === 'widget') (() => {
     const s = await cue.sessions.get(sid); if (!s) return viewList();
     S = await cue.settings.get();
     const lines = []; const interim = {}; const answers = []; let idx = -1; let current = null; let chatMode = false; let pendingQ = []; let autoTimer = null;
-    const channels = []; const t0 = Date.now();
-    cue.win.size(940, 190); cue.win.liveHotkeys(true); cue.setup.warm(); // preload the AI model so the first answer is instant
+    const channels = []; const t0 = Date.now(); const perf = { stt: null };
+    cue.win.size(940, 190); cue.win.liveHotkeys(true); cue.setup.warm(sid); // preload the model and cache this session's context so the first answer starts fast
     await cue.sessions.update(sid, { status: 'live' });
     $('#bubLogo').classList.add('run');
 
@@ -263,10 +263,10 @@ if (MODE === 'widget') (() => {
           try { await cue.setup.initStt(s.language); } finally { progressSink = null; }
         }
         const m = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-        const c1 = makeChannel('You'); await c1.start(m); channels.push(c1); $('#dMic')?.classList.add('on');
+        const c1 = makeChannel('You'); c1.onPerf = (p) => (perf.stt = p.stt); await c1.start(m); channels.push(c1); $('#dMic')?.classList.add('on');
         try {
           const d = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true }); d.getVideoTracks().forEach((t) => t.stop());
-          if (d.getAudioTracks().length) { const c2 = makeChannel(s.type === 'regular' ? 'Participant' : 'Interviewer'); await c2.start(d); channels.push(c2); $('#dSys')?.classList.add('on'); }
+          if (d.getAudioTracks().length) { const c2 = makeChannel(s.type === 'regular' ? 'Participant' : 'Interviewer'); c2.onPerf = (p) => (perf.stt = p.stt); await c2.start(d); channels.push(c2); $('#dSys')?.classList.add('on'); }
           else toast('No system audio captured — listening to your mic only', 5000);
         } catch { toast('System audio unavailable — listening to your mic only (macOS needs BlackHole)', 6000); }
         refreshLine();
@@ -283,7 +283,7 @@ if (MODE === 'widget') (() => {
       if (p.style.display === 'none') { p.style.display = 'flex'; cue.win.size(940, 520); }
       const live = current && current.a === a;
       p.innerHTML = `<div class="nav"><button class="nb" id="pPrev" title="Previous">${ic('chevron-left', 14)}${MOD}←</button><button class="nb" id="pNext" title="Next">${MOD}→${ic('chevron-right', 14)}</button><span class="cnt">${idx + 1} / ${answers.length}</span><div class="grow"></div><button class="lbtn sq" id="pCopy" title="Copy answer">${ic('copy', 15)}</button><button class="lbtn" id="pClear">${ic('eraser', 14)}Clear<kbd>${MOD}⌫</kbd></button></div>
-        <div class="acard"><div class="q">${ic('message-square-text', 15)}<span>${esc(a.q)}</span></div><div class="a ${live ? 'live' : ''}">${md(a.a || '…')}</div><div class="meta">${esc(a.kind)} · ${new Date(a.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div></div>`;
+        <div class="acard"><div class="q">${ic('message-square-text', 15)}<span>${esc(a.q)}</span></div><div class="a ${live ? 'live' : ''}">${md(a.a || '…')}</div><div class="meta">${esc(a.kind)} · ${new Date(a.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${a.stats ? ` · first word ${a.stats.ttft != null ? (a.stats.ttft / 1000).toFixed(1) + 's' : '—'}${a.stats.tps ? ` · ${a.stats.tps} tok/s` : ''}${a.stats.promptTokens ? ` · ${a.stats.promptTokens} prompt tokens` : ''}` : ''}${a.sttMs ? ` · speech→text ${(a.sttMs / 1000).toFixed(1)}s` : ''}</div></div>`;
       $('#pPrev').onclick = () => nav(-1); $('#pNext').onclick = () => nav(1);
       $('#pCopy').onclick = () => { navigator.clipboard.writeText(a.a); toast('Copied', 1200); };
       $('#pClear').onclick = clearAnswers;
@@ -293,7 +293,7 @@ if (MODE === 'widget') (() => {
 
     const early = {}; // events that arrive before ask() has returned its request id
     const onChunk = ({ reqId, text }) => { if (!current || current.reqId !== reqId) { (early[reqId] ||= []).push(['c', { reqId, text }]); return; } current.a.a += text; if (answers[idx] === current.a) { const el = $('.acard .a'); if (el) el.innerHTML = md(current.a.a); } };
-    const onDone = ({ reqId, ok, error }) => { if (!current || current.reqId !== reqId) { (early[reqId] ||= []).push(['d', { reqId, ok, error }]); return; } if (!ok) current.a.a += (current.a.a ? '\n\n' : '') + '⚠ ' + error; current = null; renderPanel(); };
+    const onDone = ({ reqId, ok, error, stats }) => { if (!current || current.reqId !== reqId) { (early[reqId] ||= []).push(['d', { reqId, ok, error, stats }]); return; } current.a.stats = stats || null; if (!ok) current.a.a += (current.a.a ? '\n\n' : '') + '⚠ ' + error; current = null; renderPanel(); };
     cue.llm.onChunk(onChunk); cue.llm.onDone(onDone);
 
     async function ask({ kind = 'Answer', image = null, typed = '' } = {}) {
@@ -301,7 +301,7 @@ if (MODE === 'widget') (() => {
       const lastQ = pendingQ.join(' ').trim();
       const q = typed || (image ? 'Screenshot analysis' : lastQ || 'Latest part of the conversation');
       const question = typed || (image ? '' : lastQ ? `Answer this question that was just asked in the conversation: ${lastQ}` : '');
-      const a = { kind, q, a: '', t: Date.now() }; answers.push(a); idx = answers.length - 1; renderPanel();
+      const a = { kind, q, a: '', t: Date.now(), sttMs: perf.stt }; answers.push(a); idx = answers.length - 1; renderPanel();
       try {
         const reqId = await cue.llm.ask({ sessionId: sid, question, image, transcript: lines }); current = { reqId, a };
         pendingQ = []; renderPanel();
@@ -363,13 +363,13 @@ if (MODE === 'widget') (() => {
         <label class="lbl">Deepgram API key</label><input id="deepgramKey" type="password" value="${esc(S.deepgramKey)}" />
         <label class="lbl">Speech recognition engine</label><select id="stt"><option value="local">Local Whisper (free)</option><option value="deepgram">Deepgram (cloud, needs key)</option></select>
       </div></details>
-      <details class="adv"><summary>${ic('cpu', 16)}Local engine options${ic('chevron-down', 16)}</summary><div><div class="row"><div class="grow"><label class="lbl">Ollama URL</label><input id="ollamaUrl" value="${esc(S.ollamaUrl)}" /></div></div></div></details>
+      <details class="adv"><summary>${ic('cpu', 16)}Local engine options${ic('chevron-down', 16)}</summary><div><label class="lbl">Speech recognition speed</label><select id="sttQuality"><option value="fast">Fast — Whisper tiny (lightest on your Mac)</option><option value="balanced">Balanced — Whisper base (more accurate, ~2–4x slower)</option></select><label class="lbl">Ollama URL</label><input id="ollamaUrl" value="${esc(S.ollamaUrl)}" /></div></details>
       <div class="wizfoot"><button class="btn ghost" id="cancel">Back</button><button class="btn primary" id="save">Save</button></div></div>`)); bindHeader();
-    $('#stt').value = S.stt || 'local';
+    $('#stt').value = S.stt || 'local'; $('#sttQuality').value = S.sttQuality || 'fast';
     setupPanel($('#chk'), S.language);
     $('#cancel').onclick = viewList;
     $('#save').onclick = async () => {
-      const patch = {}; ['anthropicKey', 'deepgramKey', 'stt', 'ollamaUrl'].forEach((k) => (patch[k] = $('#' + k).value));
+      const patch = {}; ['anthropicKey', 'deepgramKey', 'stt', 'sttQuality', 'ollamaUrl'].forEach((k) => (patch[k] = $('#' + k).value));
       patch.provider = patch.anthropicKey ? S.provider : 'ollama'; S = await cue.settings.set(patch); toast('Saved'); viewList();
     };
   }

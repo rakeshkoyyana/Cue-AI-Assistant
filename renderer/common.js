@@ -80,7 +80,7 @@ async function setupPanel(host, lang, onChange = () => {}) {
       : `<div class="chk ok"><div class="st">${ic('check', 16)}</div><div class="grow"><div class="t">AI model ready</div><div class="s">${esc(o.model)} · ${o.vision ? 'reads screenshots directly' : 'screenshots are read with built-in OCR'}</div><div class="acts"><select id="mdl" style="width:auto;height:30px;font-size:12.5px">${o.models.map((m) => `<option ${m === o.model ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select><button class="btn ghost sm" data-a="more">${ic('plus', 14)}Get another model</button></div><div class="bar" id="ob" style="display:none"><i></i></div></div></div>`;
   const sttRow = dg ? `<div class="chk ok"><div class="st">${ic('cloud', 16)}</div><div class="grow"><div class="t">Speech recognition · Deepgram (cloud)</div><div class="s">Using your Deepgram key. Switch back to the free local engine in Settings.</div></div></div>`
     : st.stt.ready ? `<div class="chk ok"><div class="st">${ic('check', 16)}</div><div class="grow"><div class="t">Speech recognition ready</div><div class="s">Whisper runs on your CPU — audio never leaves this computer.</div></div></div>`
-      : `<div class="chk warn"><div class="st">${ic('audio-lines', 16)}</div><div class="grow"><div class="t">Speech model · Whisper</div><div class="s">One-time download (~80 MB) so Cue can transcribe the call on your computer.</div><div class="acts"><button class="btn sm primary" data-a="stt">${ic('download', 14)}Download</button></div><div class="bar" id="sb" style="display:none"><i></i></div></div></div>`;
+      : `<div class="chk warn"><div class="st">${ic('audio-lines', 16)}</div><div class="grow"><div class="t">Speech model · Whisper</div><div class="s">One-time download (~40 MB) so Cue can transcribe the call on your computer.</div><div class="acts"><button class="btn sm primary" data-a="stt">${ic('download', 14)}Download</button></div><div class="bar" id="sb" style="display:none"><i></i></div></div></div>`;
   host.innerHTML = ollamaRow + sttRow;
   const bar = (id, pct) => { const b = $(id, host); if (b) { b.style.display = 'block'; b.firstChild.style.width = (pct ?? 5) + '%'; } };
   const busy = (b, on) => host.querySelectorAll('button').forEach((x) => (x.disabled = on));
@@ -108,7 +108,7 @@ async function setupPanel(host, lang, onChange = () => {}) {
 // Free live transcription: runs Whisper locally (main process) on speech segments cut by a simple voice-activity detector.
 // Shows interim text every ~1.6 s while someone talks, and a final line after ~0.7 s of silence.
 class LocalChannel {
-  constructor(label, onLine, onInterim, lang) { Object.assign(this, { label, onLine, onInterim, lang }); this.tx = (a, l) => cue.stt.transcribe(a, l); }
+  constructor(label, onLine, onInterim, lang) { Object.assign(this, { label, onLine, onInterim, lang }); this.tx = (a, l) => cue.stt.transcribe(a, l); this.onPerf = null; }
   async start(stream) {
     this.stream = stream; this.ctx = new AudioContext({ sampleRate: 16000 });
     await this.ctx.audioWorklet.addModule('pcm-worklet.js');
@@ -124,21 +124,20 @@ class LocalChannel {
     const loud = rms > Math.max(0.012, this.noise * 3);
     if (!this.speech) { this.noise = this.noise * 0.95 + rms * 0.05; this.pre.push(f); if (this.pre.length > 3) this.pre.shift(); }
     if (loud) {
-      if (!this.speech) { this.speech = true; this.seg = [...this.pre]; this.pre = []; this.voiced = 0; this.sinceInterim = 0; this.seq++; }
+      if (!this.speech) { this.speech = true; this.seg = [...this.pre]; this.pre = []; this.voiced = 0; this.sinceInterim = 0; this.seq++; this.onInterim(this.label, '…'); }
       this.seg.push(f); this.quiet = 0; this.voiced++; this.sinceInterim++;
     } else if (this.speech) {
       this.seg.push(f); this.quiet++;
       if (this.quiet >= 7) return this.finish();
     }
-    if (this.speech && this.seg.length >= 200) return this.finish(); // keep inside Whisper's 30 s window
-    if (this.speech && this.sinceInterim >= 16 && !this.pending) { this.sinceInterim = 0; this.interim(); }
+    if (this.speech && this.seg.length >= 150) return this.finish(); // keep inside Whisper's 30 s window
   }
   merge() { const n = this.seg.reduce((a, b) => a + b.length, 0); const out = new Float32Array(n); let o = 0; for (const b of this.seg) { out.set(b, o); o += b.length; } return out; }
   interim() { const id = this.seq; this.pending = true; this.tx(this.merge(), this.lang).then((t) => { if (t && id === this.seq && this.speech) this.onInterim(this.label, t); }).catch(() => {}).finally(() => (this.pending = false)); }
   finish() {
     const audio = this.merge(), voiced = this.voiced; this.speech = false; this.seg = []; this.quiet = 0; this.voiced = 0; const id = this.seq;
     if (voiced < 4) return this.onInterim(this.label, ''); // < 0.4 s of voice: ignore clicks and breaths
-    this.tx(audio, this.lang).then((t) => { if (t) this.onLine(this.label, t); else if (id === this.seq) this.onInterim(this.label, ''); }).catch((e) => this.onInterim(this.label, '⚠ ' + e.message));
+    this.tx(audio, this.lang).then((r) => { const t = r && r.text; if (r && r.ms) this.onPerf?.({ stt: r.ms, audioMs: Math.round(audio.length / 16) }); if (t) this.onLine(this.label, t); else if (id === this.seq) this.onInterim(this.label, ''); }).catch((e) => this.onInterim(this.label, '⚠ ' + e.message));
   }
   stop() { try { this.node?.disconnect(); this.ctx?.close(); } catch {} this.stream?.getTracks().forEach((t) => t.stop()); }
 }

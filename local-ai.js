@@ -4,18 +4,19 @@ const path = require('path');
 const fs = require('fs');
 
 // ---------------- Whisper (speech-to-text) ----------------
-const STT_MODELS = { en: 'Xenova/whisper-base.en', multi: 'Xenova/whisper-base' };
+// 'fast' = tiny (~40 MB, ~4x cheaper than base) · 'balanced' = base (~80 MB, more accurate)
+const STT_MODELS = { fast: { en: 'Xenova/whisper-tiny.en', multi: 'Xenova/whisper-tiny' }, balanced: { en: 'Xenova/whisper-base.en', multi: 'Xenova/whisper-base' } };
 const LANG_NAME = { es: 'spanish', fr: 'french', de: 'german', hi: 'hindi', pt: 'portuguese', it: 'italian', nl: 'dutch', ja: 'japanese', ko: 'korean', zh: 'chinese', ru: 'russian' };
 let cacheDir = '';
 let pipe = null, pipeModel = '', loading = null, queue = Promise.resolve();
 
-const sttModelFor = (lang) => (!lang || lang === 'en' ? STT_MODELS.en : STT_MODELS.multi);
+const sttModelFor = (lang, quality = 'fast') => STT_MODELS[quality === 'balanced' ? 'balanced' : 'fast'][!lang || lang === 'en' ? 'en' : 'multi'];
 const marker = (model) => path.join(cacheDir, model.replace('/', '__') + '.ready');
 const setCacheDir = (d) => { cacheDir = d; fs.mkdirSync(d, { recursive: true }); };
-const sttReady = (lang) => fs.existsSync(marker(sttModelFor(lang)));
+const sttReady = (lang, q) => fs.existsSync(marker(sttModelFor(lang, q)));
 
-async function sttInit(lang, onProgress) {
-  const model = sttModelFor(lang);
+async function sttInit(lang, onProgress, quality) {
+  const model = sttModelFor(lang, quality);
   if (pipe && pipeModel === model) return model;
   if (loading) { await loading; if (pipeModel === model) return model; }
   loading = (async () => {
@@ -24,6 +25,7 @@ async function sttInit(lang, onProgress) {
     const files = {};
     pipe = await tf.pipeline('automatic-speech-recognition', model, {
       dtype: 'q8',
+      session_options: { intraOpNumThreads: 4 }, // leave CPU headroom for the AI model and macOS
       progress_callback: (p) => {
         if (p.status === 'progress' && p.file) { files[p.file] = { loaded: p.loaded, total: p.total }; const v = Object.values(files); const tot = v.reduce((a, b) => a + b.total, 0); if (onProgress && tot) onProgress(Math.round((v.reduce((a, b) => a + b.loaded, 0) / tot) * 100)); }
       },
@@ -35,15 +37,16 @@ async function sttInit(lang, onProgress) {
 }
 
 const HALLUCINATIONS = /^\s*(thank you\.?|thanks for watching[.!]?|thanks\.?|you|bye\.?|okay\.?|\.+|\[[^\]]*\]|\([^)]*\)|♪.*|music)\s*$/i;
-function sttTranscribe(samples, lang) {
+function sttTranscribe(samples, lang, quality) {
   const run = async () => {
-    await sttInit(lang);
+    const t0 = Date.now();
+    await sttInit(lang, null, quality);
     const audio = samples instanceof Float32Array ? samples : Float32Array.from(samples);
     const opts = { chunk_length_s: 30, return_timestamps: false };
-    if (pipeModel === STT_MODELS.multi) { opts.task = 'transcribe'; if (LANG_NAME[lang]) opts.language = LANG_NAME[lang]; }
+    if (!pipeModel.endsWith('.en')) { opts.task = 'transcribe'; if (LANG_NAME[lang]) opts.language = LANG_NAME[lang]; }
     const out = await pipe(audio, opts);
     const text = String(out.text || '').trim();
-    return HALLUCINATIONS.test(text) ? '' : text;
+    return { text: HALLUCINATIONS.test(text) ? '' : text, ms: Date.now() - t0 };
   };
   const p = queue.then(run, run); queue = p.catch(() => {}); return p; // one transcription at a time
 }
@@ -69,7 +72,9 @@ async function ollamaTags(url) {
   return ((await res.json()).models || []).map((m) => m.name).filter((n) => !/embed/i.test(n));
 }
 // Loads the model into memory ahead of time so the first answer isn't slow.
-function ollamaWarm(url, name) { return fetch(url.replace(/\/$/, '') + '/api/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: name, keep_alive: '30m' }) }).then(() => true).catch(() => false); }
+// Optionally prefills the session's system prompt (num_predict 1) so Ollama caches it and the first real answer starts fast.
+function ollamaWarm(url, name, system) { const body = system ? { model: name, stream: false, think: false, keep_alive: '30m', messages: [{ role: 'system', content: system }, { role: 'user', content: 'ok' }], options: { num_ctx: 8192, num_predict: 1 } } : { model: name, keep_alive: '30m' };
+  return fetch(url.replace(/\/$/, '') + (system ? '/api/chat' : '/api/generate'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => r.ok).catch(() => false); }
 async function ollamaPull(url, name, onProgress) {
   const res = await fetch(url.replace(/\/$/, '') + '/api/pull', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: name, stream: true }) });
   if (!res.ok) throw new Error(`Ollama couldn't download ${name}: ${await res.text()}`);

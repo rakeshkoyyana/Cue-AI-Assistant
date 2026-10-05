@@ -8,7 +8,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const mock = http.createServer((req, res) => {
   if (req.url === '/api/tags') { res.end(JSON.stringify({ models: [{ name: 'gemma3:4b' }, { name: 'llama3.2:3b' }] })); return; }
   if (req.url === '/api/chat') { let b = ''; req.on('data', (c) => (b += c)); req.on('end', async () => { const j = JSON.parse(b); global.__lastChat = j; const words = 'I led the migration of our nightly pipelines to **PySpark on Databricks**, cutting runtime by about half. The key was partitioning on event date and caching the dimension tables.'.split(' ');
-      res.write(''); for (const w of words) { res.write(JSON.stringify({ message: { content: w + ' ' } }) + '\n'); await sleep(15); } res.end(JSON.stringify({ done: true }) + '\n'); }); return; }
+      res.write(''); for (const w of words) { res.write(JSON.stringify({ message: { content: w + ' ' } }) + '\n'); await sleep(15); } res.end(JSON.stringify({ done: true, eval_count: 40, eval_duration: 2.5e9, prompt_eval_count: 1234, load_duration: 5e8 }) + '\n'); }); return; }
   res.statusCode = 404; res.end();
 }).listen(11434);
 const logs = [];
@@ -43,7 +43,7 @@ app.whenReady().then(async () => {
     await click('#bChat'); await js(`(()=>{const i=document.querySelector('#chatIn');i.value='Tell me about a pipeline you optimised';i.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter'}))})()`);
     await sleep(2200); await shot(w, '07-live-answer');
     // VAD test with synthetic audio and a stubbed transcriber
-    const vad = await js(`(async()=>{ const lines=[]; const c=new LocalChannel('Interviewer',(w,t)=>lines.push(t),()=>{},'en'); c.tx=async(a)=>'heard '+Math.round(a.length/1600)+' frames';
+    const vad = await js(`(async()=>{ const lines=[]; const c=new LocalChannel('Interviewer',(w,t)=>lines.push(t),()=>{},'en'); c.tx=async(a)=>({text:'heard '+Math.round(a.length/1600)+' frames',ms:900});
       Object.assign(c,{acc:[],accN:0,pre:[],seg:[],speech:false,quiet:0,voiced:0,noise:0.004,sinceInterim:0,seq:0,pending:false,level:0});
       const blk=(amp)=>{ const b=new Float32Array(128); for(let i=0;i<128;i++) b[i]=amp*Math.sin(i/3); return b; };
       for(let i=0;i<13*20;i++) c.feed(blk(0.0005));        // 2.6s silence
@@ -52,6 +52,11 @@ app.whenReady().then(async () => {
       for(let i=0;i<13*3;i++) c.feed(blk(0.2)); for(let i=0;i<13*10;i++) c.feed(blk(0.0005)); // 0.3s blip -> ignored
       await new Promise(r=>setTimeout(r,100)); return lines; })()`);
     console.log('VAD lines:', JSON.stringify(vad));
+    // prompt-budget check: huge resume + project folder must be trimmed for the local model
+    await js(`(async()=>{ const r = await cue.docs.addText('resume','Huge.txt','word '.repeat(30000),'uploaded'); const d = await cue.docs.addText('document','Big.md','doc '.repeat(20000),'uploaded');
+      const s = await cue.sessions.create({type:'regular',title:'Budget',resumeId:r.id,docIds:[d.id],folderPath:'${__dirname.replace(/\\/g, '/')}/..',model:'ollama:local'});
+      await cue.llm.ask({sessionId:s.id,question:'hi',transcript:Array.from({length:50},(_,i)=>({speaker:'Interviewer',text:'line '+i+' '.repeat(100)}))}); })()`);
+    await sleep(1500); console.log('budget sysChars:', global.__lastChat?.messages?.[0]?.content?.length, 'user chars:', global.__lastChat?.messages?.slice(-1)[0]?.content?.length);
     await click('#lCollapse'); await sleep(900); await shot(w, '08-bubble'); console.log('bubble size', JSON.stringify(w.getBounds()));
     await js(`document.querySelector('#bubLogo').dispatchEvent(new PointerEvent('pointerdown',{screenX:10,screenY:10,pointerId:1}));document.querySelector('#bubLogo').dispatchEvent(new PointerEvent('pointerup',{pointerId:1}))`);
     await sleep(900); console.log('restored size', JSON.stringify(w.getBounds()));
@@ -64,7 +69,7 @@ app.whenReady().then(async () => {
     await d.webContents.executeJavaScript(`document.querySelector('[data-p=sessions]').click()`); await sleep(300); await shot(d, '11-dash-sessions-dark');
     await d.webContents.executeJavaScript(`document.querySelector('#gear').click()`); await sleep(500); await shot(d, '12-dash-settings');
   } catch (e) { console.log('TEST ERROR', e); }
-  console.log('chat req:', JSON.stringify({ model: global.__lastChat?.model, think: global.__lastChat?.think, keep_alive: global.__lastChat?.keep_alive }));
+  console.log('chat req:', JSON.stringify({ sysChars: global.__lastChat?.messages?.[0]?.content?.length, msgs: global.__lastChat?.messages?.length, model: global.__lastChat?.model, think: global.__lastChat?.think, keep_alive: global.__lastChat?.keep_alive }));
   console.log('console problems:\n' + logs.join('\n'));
   app.exit(0);
 });

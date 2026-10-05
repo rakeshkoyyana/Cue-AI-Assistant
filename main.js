@@ -15,7 +15,7 @@ const defaults = {
     // Free by default: local Ollama for answers + local Whisper for transcription. Cloud keys are optional extras.
     v: 3, provider: 'ollama', stt: 'local', anthropicKey: '', anthropicModel: 'claude-sonnet-5-5',
     ollamaUrl: 'http://localhost:11434', ollamaModel: 'qwen3.5:9b',
-    deepgramKey: '', language: 'en', theme: 'dark', zoom: 1,
+    deepgramKey: '', sttQuality: 'fast', language: 'en', theme: 'dark', zoom: 1,
   },
   sessions: [],
   documents: [],
@@ -71,7 +71,9 @@ function readFolder(root) {
 }
 
 // ---------- prompts ----------
-function buildSystem(s, db) {
+// local=true trims context to fit a small model's window (8k tokens): long prompts are what make small local models slow to start answering.
+function buildSystem(s, db, local = false) {
+  const cap = (t, n) => (local && t.length > n ? t.slice(0, n) + '\n…[trimmed to fit the local model]' : t);
   const resume = db.documents.find((d) => d.id === s.resumeId);
   const docs = db.documents.filter((d) => (s.docIds || []).includes(d.id));
   const p = { style: 'concise', format: 'speakable', code: true, ...(s.prefs || {}) };
@@ -82,12 +84,19 @@ function buildSystem(s, db) {
     ? `You are Cue, a private real-time call copilot. You see a live transcript of a work call and help the user respond accurately and relevantly. When a project folder is provided, ground answers in the actual files and cite paths. If something is not in the provided context, say so instead of guessing. ${style} ${format} ${code}`
     : `You are Cue, a private real-time interview copilot. You see a live transcript of an interview. Write answers in the candidate's first-person voice, grounded in their real resume and the job description. Never invent employers, titles or metrics that are not in the resume; if the resume lacks something, give a truthful bridging answer. ${style} ${format} ${code}`;
   sys += `\n\n# Session\nTitle: ${s.title || ''}\nCompany: ${s.company || ''}\nRole: ${s.role || ''}\nLanguage: ${s.language || 'en'}`;
-  if (s.jobDescription) sys += `\n\n# Job description\n${s.jobDescription}`;
+  if (s.jobDescription) sys += `\n\n# Job description\n${cap(s.jobDescription, 3500)}`;
   if (s.description) sys += `\n\n# Call description\n${s.description}`;
   if (s.notes) sys += `\n\n# Extra instructions from the user\n${s.notes}`;
-  if (resume) sys += `\n\n# Resume (${resume.name})\n${resume.text.slice(0, 30000)}`;
-  for (const d of docs) sys += `\n\n# Document: ${d.name}\n${d.text.slice(0, 30000)}`;
-  if (s.folderPath && fs.existsSync(s.folderPath)) sys += `\n\n# Project folder: ${s.folderPath}\n` + readFolder(s.folderPath).files.map((f) => `\n--- ${f.rel} ---\n${f.text}`).join('\n');
+  if (resume) sys += `\n\n# Resume (${resume.name})\n${resume.text.slice(0, local ? 6000 : 30000)}`;
+  for (const d of docs.slice(0, local ? 3 : 99)) sys += `\n\n# Document: ${d.name}\n${d.text.slice(0, local ? 3000 : 30000)}`;
+  if (s.folderPath && fs.existsSync(s.folderPath)) {
+    let files = readFolder(s.folderPath).files;
+    if (local) { // smallest + most descriptive files first, ~10 KB total
+      const rank = (f) => (/readme|package\.json|requirements|pyproject/i.test(f.rel) ? -1 : 0); files = files.sort((a, b) => rank(a) - rank(b) || a.text.length - b.text.length);
+      let used = 0; files = files.filter((f) => (used + Math.min(f.text.length, 2500) <= 10000 ? ((used += Math.min(f.text.length, 2500)), true) : false)).map((f) => ({ ...f, text: f.text.slice(0, 2500) }));
+    }
+    sys += `\n\n# Project folder: ${s.folderPath}${local ? ' (trimmed excerpt)' : ''}\n` + files.map((f) => `\n--- ${f.rel} ---\n${f.text}`).join('\n');
+  }
   return sys;
 }
 
@@ -109,7 +118,8 @@ async function pickOllama(st, wantVision) {
   if (wantVision && !ai.isVision(name)) name = tags.find(ai.isVision) || null;
   return name;
 }
-async function streamLLM({ system, messages, image, reqId, onText, model }) {
+async function streamLLM({ system, messages, image, reqId, onText, onStats, model }) {
+  const tStart = Date.now(); let tFirst = 0; const mark = (t) => { if (!tFirst && t) tFirst = Date.now(); onText(t); };
   const st = getSettings(false); const m = resolveModel(model);
   const ctrl = new AbortController(); aborts.set(reqId, ctrl);
   try {
@@ -120,7 +130,7 @@ async function streamLLM({ system, messages, image, reqId, onText, model }) {
       const msgs = messages.map((x, i) => image && i === messages.length - 1 && x.role === 'user'
         ? { role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: image } }, { type: 'text', text: x.content }] } : x);
       const stream = client.messages.stream({ model: m.name, max_tokens: 2048, system, messages: msgs }, { signal: ctrl.signal });
-      stream.on('text', onText);
+      stream.on('text', mark);
       await stream.finalMessage();
     } else {
       let name = await pickOllama(st, !!image), useImage = image;
@@ -140,7 +150,7 @@ async function streamLLM({ system, messages, image, reqId, onText, model }) {
         const { done, value } = await reader.read(); if (done) break;
         buf += dc.decode(value, { stream: true });
         const lines = buf.split('\n'); buf = lines.pop();
-        for (const ln of lines) { if (!ln.trim()) continue; try { const j = JSON.parse(ln); if (j.message?.content) onText(j.message.content); } catch {} }
+        for (const ln of lines) { if (!ln.trim()) continue; try { const j = JSON.parse(ln); if (j.message?.content) mark(j.message.content); if (j.done && onStats) onStats({ ttft: tFirst ? tFirst - tStart : null, tps: j.eval_count && j.eval_duration ? Math.round((j.eval_count / (j.eval_duration / 1e9)) * 10) / 10 : null, promptTokens: j.prompt_eval_count || null, loadMs: j.load_duration ? Math.round(j.load_duration / 1e6) : null }); } catch {} }
       }
     }
   } finally { aborts.delete(reqId); }
@@ -174,12 +184,12 @@ function registerIpc() {
     try { const models = await ai.ollamaTags(st.ollamaUrl); const want = st.ollamaModel; const have = models.includes(want) ? want : models[0] || ''; ollama = { ok: true, models, model: have, wanted: want, ready: !!have, vision: models.some(ai.isVision) }; }
     catch { ollama = { ok: false, models: [], model: '', wanted: st.ollamaModel, ready: false }; }
     const ramGB = Math.round(os.totalmem() / 1e9);
-    return { ramGB, ollama, stt: { ready: ai.sttReady(lang || st.language), model: ai.sttModelFor(lang || st.language) }, cloud: { anthropic: !!st.anthropicKey, deepgram: !!st.deepgramKey, sttEngine: st.stt } };
+    return { ramGB, ollama, stt: { ready: ai.sttReady(lang || st.language, st.sttQuality), model: ai.sttModelFor(lang || st.language, st.sttQuality), quality: st.sttQuality }, cloud: { anthropic: !!st.anthropicKey, deepgram: !!st.deepgramKey, sttEngine: st.stt } };
   });
-  ipcMain.handle('ollama:warm', async () => { const st = getSettings(false); try { const n = await pickOllama(st, false); return n ? ai.ollamaWarm(st.ollamaUrl, n) : false; } catch { return false; } });
+  ipcMain.handle('ollama:warm', async (_e, sid) => { const st = getSettings(false); try { const n = await pickOllama(st, false); if (!n) return false; const db = load(); const s = sid && db.sessions.find((x) => x.id === sid); return ai.ollamaWarm(st.ollamaUrl, n, s ? buildSystem(s, db, true) : null); } catch { return false; } });
   ipcMain.handle('ollama:pull', async (e, name) => { const st = getSettings(false); await ai.ollamaPull(st.ollamaUrl, name, (pct, status) => progress(e, { kind: 'ollama', pct, status })); return true; });
-  ipcMain.handle('stt:init', async (e, lang) => { await ai.sttInit(lang, (pct) => progress(e, { kind: 'stt', pct })); return true; });
-  ipcMain.handle('stt:transcribe', (_e, samples, lang) => ai.sttTranscribe(samples, lang));
+  ipcMain.handle('stt:init', async (e, lang) => { await ai.sttInit(lang, (pct) => progress(e, { kind: 'stt', pct }), getSettings(false).sttQuality); return true; });
+  ipcMain.handle('stt:transcribe', (_e, samples, lang) => ai.sttTranscribe(samples, lang, getSettings(false).sttQuality));
   ipcMain.handle('app:openExternal', (_e, url) => { if (/^https:\/\/(ollama\.com|huggingface\.co)\//.test(url)) shell.openExternal(url); });
 
   ipcMain.handle('sessions:list', () => load().sessions.map(({ transcript, messages, ...r }) => ({ ...r, lines: (transcript || []).length, answers: Math.floor((messages || []).length / 2) })).sort((a, b) => b.createdAt - a.createdAt));
@@ -228,17 +238,18 @@ function registerIpc() {
     const sender = e.sender; const w = BrowserWindow.fromWebContents(sender);
     const db = load(); const s = db.sessions.find((x) => x.id === sessionId); if (!s) throw new Error('Session not found');
     const reqId = id();
-    const tx = (transcript || []).slice(-60).map((l) => `${l.speaker}: ${l.text}`).join('\n');
+    const local = resolveModel(s.model).provider === 'ollama';
+    const tx = (transcript || []).slice(local ? -16 : -60).map((l) => `${l.speaker}: ${l.text}`).join('\n').slice(local ? -2500 : -20000);
     const q = (question && question.trim()) || (image ? 'Analyze this screenshot and help me answer or solve what it shows.' : 'Based on the latest part of the conversation, what should I say next?');
     const content = `# Live transcript (most recent)\n${tx || '(no transcript yet)'}\n\n# Request\n${q}`;
-    const history = (s.messages || []).slice(-8).map((m) => ({ role: m.role, content: m.content }));
-    let full = '';
+    const history = (s.messages || []).slice(local ? -4 : -8).map((m) => ({ role: m.role, content: local ? String(m.content).slice(0, 700) : m.content }));
+    let full = '', stats = null;
     (async () => {
       try {
-        await streamLLM({ system: buildSystem(s, db), messages: [...history, { role: 'user', content }], image, reqId, model: s.model, onText: (t) => { full += t; send(w, 'llm:chunk', { reqId, text: t }); } });
+        await streamLLM({ system: buildSystem(s, db, local), messages: [...history, { role: 'user', content }], image, reqId, model: s.model, onStats: (x) => (stats = x), onText: (t) => { full += t; send(w, 'llm:chunk', { reqId, text: t }); } });
         const db2 = load(); const s2 = db2.sessions.find((x) => x.id === sessionId);
         if (s2) { s2.messages.push({ role: 'user', content: q, t: Date.now(), image: !!image }, { role: 'assistant', content: full, t: Date.now() }); save(db2); }
-        send(w, 'llm:done', { reqId, ok: true });
+        send(w, 'llm:done', { reqId, ok: true, stats });
       } catch (err) { send(w, 'llm:done', { reqId, ok: false, error: err.name === 'AbortError' ? 'Stopped' : err.message }); }
     })();
     return reqId;

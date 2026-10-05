@@ -1,4 +1,5 @@
-const { app, BrowserWindow, ipcMain, dialog, desktopCapturer, session, safeStorage, globalShortcut, screen, nativeTheme } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, desktopCapturer, session, safeStorage, globalShortcut, screen, nativeTheme, shell } = require('electron');
+const ai = require('./local-ai');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -10,9 +11,10 @@ const SECRET_KEYS = ['anthropicKey', 'deepgramKey'];
 
 const defaults = {
   settings: {
-    provider: 'anthropic', anthropicKey: '', anthropicModel: 'claude-sonnet-5-5',
-    ollamaUrl: 'http://localhost:11434', ollamaModel: 'llama3.1',
-    deepgramKey: '', language: 'en', theme: 'light', zoom: 1,
+    // Free by default: local Ollama for answers + local Whisper for transcription. Cloud keys are optional extras.
+    v: 2, provider: 'ollama', stt: 'local', anthropicKey: '', anthropicModel: 'claude-sonnet-5-5',
+    ollamaUrl: 'http://localhost:11434', ollamaModel: 'gemma3:4b',
+    deepgramKey: '', language: 'en', theme: 'dark', zoom: 1,
   },
   sessions: [],
   documents: [],
@@ -22,7 +24,11 @@ const defaults = {
 const enc = (v) => (!v ? '' : safeStorage.isEncryptionAvailable() ? 'enc:' + safeStorage.encryptString(v).toString('base64') : 'raw:' + v);
 const dec = (v) => (!v ? '' : v.startsWith('enc:') ? safeStorage.decryptString(Buffer.from(v.slice(4), 'base64')) : v.startsWith('raw:') ? v.slice(4) : v);
 function load() {
-  try { const d = JSON.parse(fs.readFileSync(DB_PATH(), 'utf8')); return { ...defaults, ...d, settings: { ...defaults.settings, ...d.settings } }; }
+  try {
+    const d = JSON.parse(fs.readFileSync(DB_PATH(), 'utf8')); const st = { ...defaults.settings, ...d.settings };
+    if (!st.v || st.v < 2) Object.assign(st, { v: 2, provider: 'ollama', stt: 'local', ollamaModel: 'gemma3:4b', theme: 'dark' }); // v0.1 → v0.2: free-by-default
+    return { ...defaults, ...d, settings: st };
+  }
   catch { return JSON.parse(JSON.stringify(defaults)); }
 }
 const save = (db) => fs.writeFileSync(DB_PATH(), JSON.stringify(db, null, 2));
@@ -87,9 +93,19 @@ function buildSystem(s, db) {
 const aborts = new Map();
 function resolveModel(model) {
   const st = getSettings(false);
-  if (model && model.startsWith('ollama:')) return { provider: 'ollama', name: st.ollamaModel };
-  if (model && model.startsWith('anthropic:')) return { provider: 'anthropic', name: model.slice(10) };
-  return st.provider === 'ollama' ? { provider: 'ollama', name: st.ollamaModel } : { provider: 'anthropic', name: st.anthropicModel };
+  // A session that asks for a cloud model but has no key silently falls back to the free local model.
+  if (model && model.startsWith('anthropic:') && st.anthropicKey) return { provider: 'anthropic', name: model.slice(10) };
+  if (!model && st.provider === 'anthropic' && st.anthropicKey) return { provider: 'anthropic', name: st.anthropicModel };
+  return { provider: 'ollama', name: st.ollamaModel };
+}
+// Use the configured Ollama model if it's installed; otherwise the first installed chat model; otherwise explain how to get one.
+async function pickOllama(st, wantVision) {
+  let tags; try { tags = await ai.ollamaTags(st.ollamaUrl); } catch { throw new Error('Cue can\'t reach Ollama. Install it from ollama.com and keep it running — or open Setup (⋮ menu) for one-click help.'); }
+  if (!tags.length) throw new Error('No local model installed yet. Open Setup (⋮ menu) and press "Download" next to the AI model.');
+  const has = (n) => tags.find((t) => t === n || t.split(':')[0] === n.split(':')[0] && n.indexOf(':') < 0);
+  let name = tags.includes(st.ollamaModel) ? st.ollamaModel : (has(st.ollamaModel) || tags[0]);
+  if (wantVision && !ai.isVision(name)) name = tags.find(ai.isVision) || null;
+  return name;
 }
 async function streamLLM({ system, messages, image, reqId, onText, model }) {
   const st = getSettings(false); const m = resolveModel(model);
@@ -105,8 +121,14 @@ async function streamLLM({ system, messages, image, reqId, onText, model }) {
       stream.on('text', onText);
       await stream.finalMessage();
     } else {
-      const msgs = [{ role: 'system', content: system }, ...messages.map((x, i) => (image && i === messages.length - 1 ? { ...x, images: [image] } : x))];
-      const res = await fetch(st.ollamaUrl.replace(/\/$/, '') + '/api/chat', { method: 'POST', signal: ctrl.signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: m.name, messages: msgs, stream: true }) });
+      let name = await pickOllama(st, !!image), useImage = image;
+      if (!name) { // no vision-capable local model: read the screenshot with free local OCR and send the text instead
+        const text = await ai.ocr(image, path.join(app.getPath('userData'), 'ocr')).catch((e) => { throw new Error('Screenshot text recognition failed (' + e.message + '). First use downloads a small language file — check your internet connection.'); });
+        messages = messages.map((x, i) => (i === messages.length - 1 ? { ...x, content: x.content + `\n\n# Text read from my screen (OCR, may contain errors)\n${text || '(nothing readable)'}` } : x));
+        useImage = null; name = await pickOllama(st, false);
+      }
+      const msgs = [{ role: 'system', content: system }, ...messages.map((x, i) => (useImage && i === messages.length - 1 ? { ...x, images: [useImage] } : x))];
+      const res = await fetch(st.ollamaUrl.replace(/\/$/, '') + '/api/chat', { method: 'POST', signal: ctrl.signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: name, messages: msgs, stream: true, options: { num_ctx: 8192 } }) });
       if (!res.ok) throw new Error(`Ollama error ${res.status}: ${await res.text()}`);
       const reader = res.body.getReader(); const dc = new TextDecoder(); let buf = '';
       for (;;) {
@@ -140,12 +162,25 @@ function registerIpc() {
   });
   ipcMain.handle('deepgram:key', () => getSettings(false).deepgramKey);
 
+  // ---- free local engines: status, downloads, speech-to-text ----
+  const progress = (e, d) => send(BrowserWindow.fromWebContents(e.sender), 'setup:progress', d);
+  ipcMain.handle('setup:status', async (_e, lang) => {
+    const st = getSettings(false); let ollama;
+    try { const models = await ai.ollamaTags(st.ollamaUrl); const want = st.ollamaModel; const have = models.includes(want) ? want : models[0] || ''; ollama = { ok: true, models, model: have, wanted: want, ready: !!have, vision: models.some(ai.isVision) }; }
+    catch { ollama = { ok: false, models: [], model: '', wanted: st.ollamaModel, ready: false }; }
+    return { ollama, stt: { ready: ai.sttReady(lang || st.language), model: ai.sttModelFor(lang || st.language) }, cloud: { anthropic: !!st.anthropicKey, deepgram: !!st.deepgramKey, sttEngine: st.stt } };
+  });
+  ipcMain.handle('ollama:pull', async (e, name) => { const st = getSettings(false); await ai.ollamaPull(st.ollamaUrl, name, (pct, status) => progress(e, { kind: 'ollama', pct, status })); return true; });
+  ipcMain.handle('stt:init', async (e, lang) => { await ai.sttInit(lang, (pct) => progress(e, { kind: 'stt', pct })); return true; });
+  ipcMain.handle('stt:transcribe', (_e, samples, lang) => ai.sttTranscribe(samples, lang));
+  ipcMain.handle('app:openExternal', (_e, url) => { if (/^https:\/\/(ollama\.com|huggingface\.co)\//.test(url)) shell.openExternal(url); });
+
   ipcMain.handle('sessions:list', () => load().sessions.map(({ transcript, messages, ...r }) => ({ ...r, lines: (transcript || []).length, answers: Math.floor((messages || []).length / 2) })).sort((a, b) => b.createdAt - a.createdAt));
   ipcMain.handle('sessions:get', (_e, sid) => load().sessions.find((s) => s.id === sid));
   ipcMain.handle('sessions:create', (_e, data) => {
     const db = load(); const st = db.settings;
     const s = { id: id(), type: 'interview', title: '', company: '', role: '', description: '', jobDescription: '', notes: '', resumeId: null, docIds: [], folderPath: '',
-      language: st.language || 'en', model: 'anthropic:claude-sonnet-5-5', prefs: { style: 'concise', format: 'speakable', code: true }, autoGenerate: false, saveTranscript: true,
+      language: st.language || 'en', model: 'ollama:local', prefs: { style: 'concise', format: 'speakable', code: true }, autoGenerate: false, saveTranscript: true,
       status: 'ready', usageMs: 0, transcript: [], messages: [], summary: '', createdAt: Date.now(), ...data };
     db.sessions.push(s); save(db); return s;
   });
@@ -225,12 +260,13 @@ function registerIpc() {
   ipcMain.handle('win:size', (e, w, h) => { const win = winOf(e); collapsed = null; win.setResizable(true); win.setSize(Math.round(w), Math.round(h), true); });
   ipcMain.handle('win:collapse', (e) => { const win = winOf(e); if (collapsed) { win.setSize(...collapsed, true); collapsed = null; } else { collapsed = win.getSize(); win.setSize(collapsed[0], 72, true); } return !!collapsed; });
   // Hide: shrink the widget to a small floating bubble (and back), keeping its position
-  let prevBounds = null;
+  let prevBounds = null; const BUBBLE = 52;
   ipcMain.handle('win:bubble', (e, on) => {
     const win = winOf(e);
-    if (on) { prevBounds = win.getBounds(); win.setMinimumSize(1, 1); win.setBounds({ x: prevBounds.x, y: prevBounds.y, width: 120, height: 64 }, true); win.setOpacity(1); }
-    else if (prevBounds) { win.setMinimumSize(380, 72); win.setBounds(prevBounds, true); prevBounds = null; }
+    if (on) { prevBounds = win.getBounds(); win.setMinimumSize(1, 1); win.setResizable(false); win.setBounds({ x: prevBounds.x + prevBounds.width - BUBBLE - 8, y: prevBounds.y + 8, width: BUBBLE, height: BUBBLE }, false); win.setOpacity(1); }
+    else if (prevBounds) { const b = win.getBounds(); win.setResizable(true); win.setMinimumSize(380, 72); win.setBounds({ ...prevBounds, x: Math.max(0, b.x + BUBBLE + 8 - prevBounds.width), y: Math.max(0, b.y - 8) }, false); prevBounds = null; }
   });
+  ipcMain.handle('win:moveBy', (e, dx, dy) => { const w = winOf(e); const [x, y] = w.getPosition(); w.setPosition(Math.round(x + dx), Math.round(y + dy)); });
   ipcMain.handle('win:nextScreen', (e) => {
     const win = winOf(e); const ds = screen.getAllDisplays(); const cur = screen.getDisplayMatching(win.getBounds());
     const next = ds[(ds.findIndex((d) => d.id === cur.id) + 1) % ds.length]; win.setPosition(next.bounds.x + 40, next.bounds.y + 40);
@@ -264,6 +300,7 @@ function createWidget() {
   const z = getSettings(false).zoom || 1;
   widget = new BrowserWindow({
     width: 460, height: 720, minWidth: 380, minHeight: 72, frame: false, transparent: true, hasShadow: true, alwaysOnTop: true, title: 'Cue',
+    backgroundColor: '#00000000',
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
   });
   widget.setAlwaysOnTop(true, 'floating');
@@ -273,11 +310,12 @@ function createWidget() {
 }
 function openDashboard(hash) {
   if (dash && !dash.isDestroyed()) { dash.show(); dash.focus(); if (hash) send(dash, 'dash-nav', hash); return; }
-  dash = new BrowserWindow({ width: 1280, height: 820, minWidth: 900, minHeight: 600, title: 'Cue Dashboard', backgroundColor: '#ffffff', webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false } });
+  dash = new BrowserWindow({ width: 1280, height: 820, minWidth: 900, minHeight: 600, title: 'Cue Dashboard', backgroundColor: '#0b0c0f', webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false } });
   dash.loadFile(path.join(__dirname, 'renderer', 'index.html'), { query: { mode: 'dashboard', page: hash || 'sessions' } });
 }
 
 app.whenReady().then(() => {
+  ai.setCacheDir(path.join(app.getPath('userData'), 'models'));
   nativeTheme.themeSource = getSettings(false).theme || 'light';
   // lets the renderer capture system (loopback) audio for the "Interviewer" channel
   session.defaultSession.setDisplayMediaRequestHandler(async (_req, cb) => {
@@ -288,5 +326,5 @@ app.whenReady().then(() => {
   createWidget();
   globalShortcut.register('CommandOrControl+Shift+H', () => widget && (widget.isVisible() ? widget.hide() : widget.show()));
 });
-app.on('will-quit', () => globalShortcut.unregisterAll());
+app.on('will-quit', () => { globalShortcut.unregisterAll(); ai.ocrStop(); });
 app.on('window-all-closed', () => app.quit());

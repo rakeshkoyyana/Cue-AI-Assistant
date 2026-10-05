@@ -1,0 +1,28 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Brand options</title>
+<style>
+@font-face{font-family:Inter;font-weight:100 900;src:url(../renderer/fonts/inter-latin-wght-normal.woff2)}
+*{box-sizing:border-box} body{margin:0;background:#0a0b0e;color:#f3f4f7;font:14px/1.5 Inter,sans-serif;padding:44px 48px 40px;width:1656px;-webkit-font-smoothing:antialiased}
+h1{font-size:30px;letter-spacing:-.03em;margin:0 0 6px} .sub{color:#8d94a5;margin:0 0 30px;font-size:15px}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:18px}
+.card{background:#111319;border:1px solid rgba(255,255,255,.08);border-radius:20px;padding:18px;position:relative}
+.num{position:absolute;top:16px;left:16px;width:26px;height:26px;border-radius:50%;background:#1e222c;color:#b0b5c2;font-weight:650;font-size:12px;display:flex;align-items:center;justify-content:center}
+.hero{height:150px;border-radius:14px;background:radial-gradient(80% 100% at 50% 0%,rgba(124,108,255,.16),transparent 70%),#0d0f14;border:1px solid rgba(255,255,255,.06);display:flex;align-items:center;justify-content:center}
+.name{font-size:23px;font-weight:680;letter-spacing:-.03em;margin:16px 0 2px;display:flex;align-items:center;gap:8px} .name b{font-size:11px;letter-spacing:.06em;padding:3px 7px;border-radius:7px;background:linear-gradient(135deg,#7c6cff,#38bdf8);color:#fff}
+.tag{color:#9aa1b2;min-height:42px;font-size:13.5px}
+.row{display:flex;align-items:center;gap:12px;margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.07)}
+.chip{display:flex;align-items:center;gap:8px;height:40px;padding:0 12px;border-radius:12px;font-weight:650;font-size:15px;letter-spacing:-.02em}
+.dk{background:#171a22;color:#f3f4f7}.lt{background:#f4f5f8;color:#12141b}
+.bub{width:46px;height:46px;border-radius:50%;background:#111319;border:1px solid rgba(255,255,255,.14);box-shadow:0 0 0 3px rgba(124,108,255,.14),0 6px 18px rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;margin-left:auto}
+.more{margin-top:26px;padding:16px 20px;border-radius:16px;border:1px dashed rgba(255,255,255,.16);color:#b0b5c2}
+.more b{color:#f3f4f7}
+</style></head><body>
+<h1>Name &amp; logo options</h1><p class="sub">Each card pairs a name with a logo. Mix and match — reply with a name number and a logo number. Marks are shown large, as app icon sizes, and as the floating Hide bubble.</p>
+<div class="grid" id="g"></div>
+<div class="more"><b>More name ideas without a logo yet:</b> &nbsp;Wings AI (the stage wings, where the prompter stands) · Prompter AI · Backstage AI · Mentor AI · Edge AI · Echo AI · Ally AI · Oracle AI · Polish AI · Ace AI</div>
+<script src="../renderer/brand.js"></script>
+<script>
+const items=[['poise','Poise','Calm, confident answers under pressure.'],['nudge','Nudge','A quiet push at exactly the right moment.'],['hush','Hush','Private by design. Whisper-quiet help.'],['wave','Cadence','Keeps you in rhythm with the conversation.'],['lumen','Lumen','Puts light on the answer when it counts.'],['sidekick','Sidekick','Always beside you, never in the way.'],['bubble','CueMind','Your cue, thought through.'],['ring','Cue','Keep the name, add AI. Open ring = the "C" + a listening dot.']];
+const m=(k,s)=>{ const u='x'+Math.random().toString(36).slice(2,7); return `<svg width="${s}" height="${s}" viewBox="0 0 64 64">${MARKS[k](u)}</svg>`; };
+g.innerHTML=items.map(([k,n,t],i)=>`<div class="card"><div class="num">${i+1}</div><div class="hero">${m(k,92)}</div><div class="name">${n} <b>AI</b></div><div class="tag">${t}</div>
+<div class="row"><div class="chip dk">${m(k,22)}${n}</div><div class="chip lt">${m(k,22)}${n}</div><div class="bub">${m(k,26)}</div></div></div>`).join('');
+</script></body></html>

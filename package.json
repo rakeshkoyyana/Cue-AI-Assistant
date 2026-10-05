@@ -1,24 +1,40 @@
 {
   "name": "cue",
   "version": "0.1.0",
-  "description": "Cue — a private, self-hosted AI copilot for interviews and meetings",
+  "description": "Cue \u2014 a private, self-hosted AI copilot for interviews and meetings",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder"
+    "dist": "electron-builder",
+    "icons": "node tools/build-icons.js",
+    "test:smoke": "xvfb-run -a electron --no-sandbox tools/smoke.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.60.0",
+    "@huggingface/transformers": "^4.3.0",
     "mammoth": "^1.8.0",
-    "pdf-parse": "^1.1.1"
+    "pdf-parse": "^1.1.1",
+    "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
+    "@fontsource-variable/inter": "^5.3.0",
     "electron": "^33.0.0",
-    "electron-builder": "^25.0.0"
+    "electron-builder": "^25.0.0",
+    "lucide-static": "^1.52.0"
   },
   "build": {
     "appId": "com.rakesh.cue",
     "productName": "Cue",
-    "files": ["main.js", "preload.js", "renderer/**/*", "package.json"]
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/onnxruntime-node/**",
+      "node_modules/sharp/**",
+      "node_modules/@img/**"
+    ]
   }
 }

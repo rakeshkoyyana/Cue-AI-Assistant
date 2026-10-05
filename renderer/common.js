@@ -22,6 +22,7 @@ function md(src) {
   return String(src).split(/```/).map((p, i) => (i % 2 ? `<pre>${esc(p.replace(/^\w*\n/, ''))}</pre>` : esc(p).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/\n/g, '<br>'))).join('');
 }
 function applyTheme(t) { if (t === 'system') document.documentElement.removeAttribute('data-theme'); else document.documentElement.dataset.theme = t; }
+applyTheme('dark');
 function popMenu(anchor, html, onMount) {
   $$('.menu').forEach((x) => x.remove());
   const m = document.createElement('div'); m.className = 'menu'; m.innerHTML = html; document.body.appendChild(m);
@@ -32,12 +33,10 @@ function popMenu(anchor, html, onMount) {
 }
 
 const LANGS = { en: 'English', es: 'Spanish', fr: 'French', de: 'German', hi: 'Hindi', pt: 'Portuguese', it: 'Italian', nl: 'Dutch', ja: 'Japanese', ko: 'Korean', zh: 'Chinese', ru: 'Russian' };
-const MODELS = [
-  { id: 'anthropic:claude-sonnet-5-5', label: 'Claude Sonnet 5.5' },
-  { id: 'anthropic:claude-opus-5-5', label: 'Claude Opus 5.5' },
-  { id: 'anthropic:claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 (fastest)' },
-  { id: 'ollama:local', label: 'Local model (Ollama)' },
-];
+// Free local AI is always first; cloud models only appear once an API key has been added (optional, future scope).
+const modelList = (S = {}) => [{ id: 'ollama:local', label: 'Local AI (free)' }].concat(S.anthropicKey ? [
+  { id: 'anthropic:claude-sonnet-5-5', label: 'Claude Sonnet 5.5 (cloud)' }, { id: 'anthropic:claude-opus-5-5', label: 'Claude Opus 5.5 (cloud)' }, { id: 'anthropic:claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 (cloud)' }] : []);
+const brandHTML = () => `${mark(BRAND.mark, 22)}<span>${BRAND.name}</span>${BRAND.suffix ? `<span class="ai">${BRAND.suffix}</span>` : ''}`;
 
 // Live transcription over Deepgram's streaming API. One Channel per audio source.
 class Channel {
@@ -59,4 +58,85 @@ class Channel {
   stop() { clearInterval(this.keep); try { this.rec?.stop(); } catch {} try { this.ws?.close(); } catch {} this.stream?.getTracks().forEach((t) => t.stop()); }
 }
 
-(async () => { const s = await cue.settings.get(); applyTheme(s.theme || 'light'); })();
+// ---------- model/engine setup checklist (used on the Connect and Settings screens) ----------
+let progressSink = null; // shared with the live overlay
+cue.setup.onProgress((p) => progressSink && progressSink(p));
+const MODEL_CHOICES = [
+  { name: 'gemma3:4b', label: 'Gemma 3 · 4B', note: 'Recommended · ~3.3 GB · can read screenshots' },
+  { name: 'llama3.2:3b', label: 'Llama 3.2 · 3B', note: 'Fastest · ~2 GB · any laptop' },
+  { name: 'qwen2.5:7b', label: 'Qwen 2.5 · 7B', note: 'Smarter · ~4.7 GB · wants 16 GB RAM' },
+];
+async function setupPanel(host, lang, onChange = () => {}) {
+  const st = await cue.setup.status(lang); const o = st.ollama;
+  const dg = st.cloud.sttEngine === 'deepgram' && st.cloud.deepgram;
+  const ollamaRow = !o.ok
+    ? `<div class="chk warn"><div class="st">${ic('circle-alert', 16)}</div><div class="grow"><div class="t">Local AI engine · Ollama</div><div class="s">Not detected. Install Ollama (free), open it once, then re-check. Everything stays on your computer.</div><div class="acts"><button class="btn sm" data-a="getollama">${ic('external-link', 14)}Get Ollama</button><button class="btn ghost sm" data-a="recheck">${ic('refresh-cw', 14)}Re-check</button></div></div></div>`
+    : !o.ready
+      ? `<div class="chk warn"><div class="st">${ic('download', 16)}</div><div class="grow"><div class="t">AI model</div><div class="s">Ollama is running. Download a model to start (one time).</div><div class="acts">${MODEL_CHOICES.map((m) => `<button class="btn sm ${m.name === 'gemma3:4b' ? 'primary' : 'ghost'}" data-pull="${m.name}" title="${m.note}">${m.label}</button>`).join('')}</div><div class="s" style="margin-top:8px">${MODEL_CHOICES[0].note}</div><div class="bar" id="ob" style="display:none"><i></i></div></div></div>`
+      : `<div class="chk ok"><div class="st">${ic('check', 16)}</div><div class="grow"><div class="t">AI model ready</div><div class="s">${esc(o.model)} · ${o.vision ? 'reads screenshots directly' : 'screenshots are read with built-in OCR'}</div><div class="acts"><select id="mdl" style="width:auto;height:30px;font-size:12.5px">${o.models.map((m) => `<option ${m === o.model ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select><button class="btn ghost sm" data-a="more">${ic('plus', 14)}Get another model</button></div><div class="bar" id="ob" style="display:none"><i></i></div></div></div>`;
+  const sttRow = dg ? `<div class="chk ok"><div class="st">${ic('cloud', 16)}</div><div class="grow"><div class="t">Speech recognition · Deepgram (cloud)</div><div class="s">Using your Deepgram key. Switch back to the free local engine in Settings.</div></div></div>`
+    : st.stt.ready ? `<div class="chk ok"><div class="st">${ic('check', 16)}</div><div class="grow"><div class="t">Speech recognition ready</div><div class="s">Whisper runs on your CPU — audio never leaves this computer.</div></div></div>`
+      : `<div class="chk warn"><div class="st">${ic('audio-lines', 16)}</div><div class="grow"><div class="t">Speech model · Whisper</div><div class="s">One-time download (~80 MB) so Cue can transcribe the call on your computer.</div><div class="acts"><button class="btn sm primary" data-a="stt">${ic('download', 14)}Download</button></div><div class="bar" id="sb" style="display:none"><i></i></div></div></div>`;
+  host.innerHTML = ollamaRow + sttRow;
+  const bar = (id, pct) => { const b = $(id, host); if (b) { b.style.display = 'block'; b.firstChild.style.width = (pct ?? 5) + '%'; } };
+  const busy = (b, on) => host.querySelectorAll('button').forEach((x) => (x.disabled = on));
+  host.onclick = async (e) => {
+    const t = e.target.closest('button'); if (!t) return;
+    if (t.dataset.a === 'getollama') cue.setup.open('https://ollama.com/download');
+    if (t.dataset.a === 'recheck') { await setupPanel(host, lang, onChange); onChange(); }
+    if (t.dataset.a === 'more') { host.insertAdjacentHTML('beforeend', `<div class="chk"><div class="st">${ic('plus', 16)}</div><div class="grow"><div class="t">Download another model</div><div class="acts">${MODEL_CHOICES.map((m) => `<button class="btn ghost sm" data-pull="${m.name}" title="${m.note}">${m.label}</button>`).join('')}</div></div></div>`); t.remove(); }
+    if (t.dataset.pull) {
+      busy(t, true); progressSink = (p) => p.kind === 'ollama' && bar('#ob', p.pct); bar('#ob', 3);
+      try { await cue.setup.pullModel(t.dataset.pull); await cue.settings.set({ ollamaModel: t.dataset.pull }); toast('Model ready'); } catch (err) { toast(err.message, 6000); }
+      progressSink = null; await setupPanel(host, lang, onChange); onChange();
+    }
+    if (t.dataset.a === 'stt') {
+      busy(t, true); progressSink = (p) => p.kind === 'stt' && bar('#sb', p.pct); bar('#sb', 3);
+      try { await cue.setup.initStt(lang); toast('Speech model ready'); } catch (err) { toast('Download failed: ' + err.message + ' — check your internet connection.', 7000); }
+      progressSink = null; await setupPanel(host, lang, onChange); onChange();
+    }
+  };
+  const sel = $('#mdl', host); if (sel) sel.onchange = async () => { await cue.settings.set({ ollamaModel: sel.value }); toast('Using ' + sel.value, 1500); };
+  return st;
+}
+
+
+// Free live transcription: runs Whisper locally (main process) on speech segments cut by a simple voice-activity detector.
+// Shows interim text every ~1.6 s while someone talks, and a final line after ~0.7 s of silence.
+class LocalChannel {
+  constructor(label, onLine, onInterim, lang) { Object.assign(this, { label, onLine, onInterim, lang }); this.tx = (a, l) => cue.stt.transcribe(a, l); }
+  async start(stream) {
+    this.stream = stream; this.ctx = new AudioContext({ sampleRate: 16000 });
+    await this.ctx.audioWorklet.addModule('pcm-worklet.js');
+    const src = this.ctx.createMediaStreamSource(new MediaStream(stream.getAudioTracks()));
+    this.node = new AudioWorkletNode(this.ctx, 'pcm'); src.connect(this.node);
+    Object.assign(this, { acc: [], accN: 0, pre: [], seg: [], speech: false, quiet: 0, voiced: 0, noise: 0.004, sinceInterim: 0, seq: 0, pending: false, level: 0 });
+    this.node.port.onmessage = (e) => this.feed(e.data);
+  }
+  feed(block) {
+    this.acc.push(block); this.accN += block.length; if (this.accN < 1600) return; // 100 ms frames
+    const f = new Float32Array(this.accN); let o = 0; for (const b of this.acc) { f.set(b, o); o += b.length; } this.acc = []; this.accN = 0;
+    let sum = 0; for (let i = 0; i < f.length; i++) sum += f[i] * f[i]; const rms = Math.sqrt(sum / f.length); this.level = rms;
+    const loud = rms > Math.max(0.012, this.noise * 3);
+    if (!this.speech) { this.noise = this.noise * 0.95 + rms * 0.05; this.pre.push(f); if (this.pre.length > 3) this.pre.shift(); }
+    if (loud) {
+      if (!this.speech) { this.speech = true; this.seg = [...this.pre]; this.pre = []; this.voiced = 0; this.sinceInterim = 0; this.seq++; }
+      this.seg.push(f); this.quiet = 0; this.voiced++; this.sinceInterim++;
+    } else if (this.speech) {
+      this.seg.push(f); this.quiet++;
+      if (this.quiet >= 7) return this.finish();
+    }
+    if (this.speech && this.seg.length >= 200) return this.finish(); // keep inside Whisper's 30 s window
+    if (this.speech && this.sinceInterim >= 16 && !this.pending) { this.sinceInterim = 0; this.interim(); }
+  }
+  merge() { const n = this.seg.reduce((a, b) => a + b.length, 0); const out = new Float32Array(n); let o = 0; for (const b of this.seg) { out.set(b, o); o += b.length; } return out; }
+  interim() { const id = this.seq; this.pending = true; this.tx(this.merge(), this.lang).then((t) => { if (t && id === this.seq && this.speech) this.onInterim(this.label, t); }).catch(() => {}).finally(() => (this.pending = false)); }
+  finish() {
+    const audio = this.merge(), voiced = this.voiced; this.speech = false; this.seg = []; this.quiet = 0; this.voiced = 0; const id = this.seq;
+    if (voiced < 4) return this.onInterim(this.label, ''); // < 0.4 s of voice: ignore clicks and breaths
+    this.tx(audio, this.lang).then((t) => { if (t) this.onLine(this.label, t); else if (id === this.seq) this.onInterim(this.label, ''); }).catch((e) => this.onInterim(this.label, '⚠ ' + e.message));
+  }
+  stop() { try { this.node?.disconnect(); this.ctx?.close(); } catch {} this.stream?.getTracks().forEach((t) => t.stop()); }
+}
+
+(async () => { const s = await cue.settings.get(); applyTheme(s.theme || 'dark'); })();

@@ -2,6 +2,24 @@
 
 A private, self-hosted AI copilot for interviews and calls (Electron). Your data stays on your computer; API keys are encrypted with your OS keychain.
 
+## Free by default (v0.2)
+
+Cue now runs with **no paid keys**:
+
+| Job | Free engine | One-time setup |
+|---|---|---|
+| Answers | **Ollama** (local LLM, default `gemma3:4b`) | Install Ollama from ollama.com, then press *Download* in Cue's Setup screen |
+| Live transcription | **Whisper** (runs on your CPU via `@huggingface/transformers`) | Press *Download* (~80 MB) in Setup |
+| Screenshots | Vision model if installed (Gemma 3 can), otherwise built-in OCR (`tesseract.js`) | none |
+
+Anthropic Claude and Deepgram are still supported as **optional cloud engines** (Settings → Cloud engines). Leave them empty and nothing leaves your computer.
+
+### Rebranding
+Name and logo live in `renderer/brand.js` (`BRAND.name`, `BRAND.mark`). `node tools/render-sheet.js` renders the logo option sheet.
+
+### Development
+`npm run icons` regenerates `renderer/icons.js` from Lucide. `npm run test:smoke` runs a headless UI test against a mocked Ollama.
+
 ## Run
 ```
 npm install

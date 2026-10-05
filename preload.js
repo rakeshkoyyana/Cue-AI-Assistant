@@ -19,8 +19,10 @@ contextBridge.exposeInMainWorld('cue', {
   },
   capture: { screenshot: () => inv('capture:screenshot') },
   deepgramKey: () => inv('deepgram:key'),
+  setup: { status: (lang) => inv('setup:status', lang), pullModel: (n) => inv('ollama:pull', n), initStt: (lang) => inv('stt:init', lang), onProgress: (cb) => on('setup:progress', cb), open: (u) => inv('app:openExternal', u) },
+  stt: { transcribe: (samples, lang) => inv('stt:transcribe', samples, lang) },
   win: {
-    size: (w, h) => inv('win:size', w, h), collapse: () => inv('win:collapse'), bubble: (on) => inv('win:bubble', on), nextScreen: () => inv('win:nextScreen'), zoom: (d) => inv('win:zoom', d),
+    size: (w, h) => inv('win:size', w, h), collapse: () => inv('win:collapse'), bubble: (on) => inv('win:bubble', on), moveBy: (dx, dy) => inv('win:moveBy', dx, dy), nextScreen: () => inv('win:nextScreen'), zoom: (d) => inv('win:zoom', d),
     close: () => inv('win:close'), opacity: (v) => inv('win:opacity', v), openDashboard: (hash) => inv('dashboard:open', hash),
     startSession: (id) => inv('widget:startSession', id), liveHotkeys: (on) => inv('hotkeys:live', on),
   },

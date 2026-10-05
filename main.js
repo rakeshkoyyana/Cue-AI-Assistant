@@ -1,5 +1,5 @@
 const { app, BrowserWindow, ipcMain, dialog, desktopCapturer, session, safeStorage, globalShortcut, screen, nativeTheme, shell } = require('electron');
-const ai = require('./local-ai');
+const ai = require('./cloud');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -8,14 +8,13 @@ const os = require('os');
 let widget, dash;
 let collapsed = null; // previous size when collapsed
 const DB_PATH = () => path.join(app.getPath('userData'), 'cue-data.json');
-const SECRET_KEYS = ['anthropicKey', 'deepgramKey'];
+const SECRET_KEYS = ['groqKey', 'anthropicKey', 'deepgramKey'];
 
 const defaults = {
   settings: {
-    // Free by default: local Ollama for answers + local Whisper for transcription. Cloud keys are optional extras.
-    v: 3, provider: 'ollama', stt: 'local', anthropicKey: '', anthropicModel: 'claude-sonnet-5-5',
-    ollamaUrl: 'http://localhost:11434', ollamaModel: 'qwen3.5:9b',
-    deepgramKey: '', sttQuality: 'fast', language: 'en', theme: 'dark', zoom: 1,
+    // Fast cloud mode: Groq (free tier) for answers + Whisper transcription. Deepgram and Anthropic are optional upgrades.
+    v: 4, provider: 'groq', groqKey: '', groqModel: 'openai/gpt-oss-120b', stt: 'groq',
+    anthropicKey: '', anthropicModel: 'claude-sonnet-5-5', deepgramKey: '', language: 'en', theme: 'dark', zoom: 1,
   },
   sessions: [],
   documents: [],
@@ -27,8 +26,7 @@ const dec = (v) => (!v ? '' : v.startsWith('enc:') ? safeStorage.decryptString(B
 function load() {
   try {
     const d = JSON.parse(fs.readFileSync(DB_PATH(), 'utf8')); const st = { ...defaults.settings, ...d.settings };
-    if (!st.v || st.v < 2) Object.assign(st, { provider: 'ollama', stt: 'local', theme: 'dark' }); // v0.1 → v0.2: free-by-default
-    if (!st.v || st.v < 3) { st.v = 3; if (['gemma3:4b', 'llama3.1', 'llama3.2:3b'].includes(st.ollamaModel)) st.ollamaModel = 'qwen3.5:9b'; } // v0.3: newer default model
+    if (!st.v || st.v < 4) { st.v = 4; st.provider = 'groq'; if (st.stt !== 'deepgram') st.stt = 'groq'; for (const k of ['ollamaUrl', 'ollamaModel', 'sttQuality']) delete st[k]; } // v0.4: fast cloud mode
     return { ...defaults, ...d, settings: st };
   }
   catch { return JSON.parse(JSON.stringify(defaults)); }
@@ -71,9 +69,10 @@ function readFolder(root) {
 }
 
 // ---------- prompts ----------
-// local=true trims context to fit a small model's window (8k tokens): long prompts are what make small local models slow to start answering.
-function buildSystem(s, db, local = false) {
-  const cap = (t, n) => (local && t.length > n ? t.slice(0, n) + '\n…[trimmed to fit the local model]' : t);
+// compact=true keeps the prompt to ~3–4k tokens so it fits Groq's free-tier per-minute token limits and starts answering instantly.
+function buildSystem(s, db, compact = false) {
+  const local = compact;
+  const cap = (t, n) => (local && t.length > n ? t.slice(0, n) + '\n…[trimmed]' : t);
   const resume = db.documents.find((d) => d.id === s.resumeId);
   const docs = db.documents.filter((d) => (s.docIds || []).includes(d.id));
   const p = { style: 'concise', format: 'speakable', code: true, ...(s.prefs || {}) };
@@ -84,16 +83,16 @@ function buildSystem(s, db, local = false) {
     ? `You are Cue, a private real-time call copilot. You see a live transcript of a work call and help the user respond accurately and relevantly. When a project folder is provided, ground answers in the actual files and cite paths. If something is not in the provided context, say so instead of guessing. ${style} ${format} ${code}`
     : `You are Cue, a private real-time interview copilot. You see a live transcript of an interview. Write answers in the candidate's first-person voice, grounded in their real resume and the job description. Never invent employers, titles or metrics that are not in the resume; if the resume lacks something, give a truthful bridging answer. ${style} ${format} ${code}`;
   sys += `\n\n# Session\nTitle: ${s.title || ''}\nCompany: ${s.company || ''}\nRole: ${s.role || ''}\nLanguage: ${s.language || 'en'}`;
-  if (s.jobDescription) sys += `\n\n# Job description\n${cap(s.jobDescription, 3500)}`;
+  if (s.jobDescription) sys += `\n\n# Job description\n${cap(s.jobDescription, 3000)}`;
   if (s.description) sys += `\n\n# Call description\n${s.description}`;
   if (s.notes) sys += `\n\n# Extra instructions from the user\n${s.notes}`;
-  if (resume) sys += `\n\n# Resume (${resume.name})\n${resume.text.slice(0, local ? 6000 : 30000)}`;
-  for (const d of docs.slice(0, local ? 3 : 99)) sys += `\n\n# Document: ${d.name}\n${d.text.slice(0, local ? 3000 : 30000)}`;
+  if (resume) sys += `\n\n# Resume (${resume.name})\n${resume.text.slice(0, local ? 5000 : 30000)}`;
+  for (const d of docs.slice(0, local ? 3 : 99)) sys += `\n\n# Document: ${d.name}\n${d.text.slice(0, local ? 2000 : 30000)}`;
   if (s.folderPath && fs.existsSync(s.folderPath)) {
     let files = readFolder(s.folderPath).files;
     if (local) { // smallest + most descriptive files first, ~10 KB total
       const rank = (f) => (/readme|package\.json|requirements|pyproject/i.test(f.rel) ? -1 : 0); files = files.sort((a, b) => rank(a) - rank(b) || a.text.length - b.text.length);
-      let used = 0; files = files.filter((f) => (used + Math.min(f.text.length, 2500) <= 10000 ? ((used += Math.min(f.text.length, 2500)), true) : false)).map((f) => ({ ...f, text: f.text.slice(0, 2500) }));
+      let used = 0; files = files.filter((f) => (used + Math.min(f.text.length, 2500) <= 8000 ? ((used += Math.min(f.text.length, 2500)), true) : false)).map((f) => ({ ...f, text: f.text.slice(0, 2500) }));
     }
     sys += `\n\n# Project folder: ${s.folderPath}${local ? ' (trimmed excerpt)' : ''}\n` + files.map((f) => `\n--- ${f.rel} ---\n${f.text}`).join('\n');
   }
@@ -104,19 +103,10 @@ function buildSystem(s, db, local = false) {
 const aborts = new Map();
 function resolveModel(model) {
   const st = getSettings(false);
-  // A session that asks for a cloud model but has no key silently falls back to the free local model.
   if (model && model.startsWith('anthropic:') && st.anthropicKey) return { provider: 'anthropic', name: model.slice(10) };
   if (!model && st.provider === 'anthropic' && st.anthropicKey) return { provider: 'anthropic', name: st.anthropicModel };
-  return { provider: 'ollama', name: st.ollamaModel };
-}
-// Use the configured Ollama model if it's installed; otherwise the first installed chat model; otherwise explain how to get one.
-async function pickOllama(st, wantVision) {
-  let tags; try { tags = await ai.ollamaTags(st.ollamaUrl); } catch { throw new Error('Cue can\'t reach Ollama. Install it from ollama.com and keep it running — or open Setup (⋮ menu) for one-click help.'); }
-  if (!tags.length) throw new Error('No local model installed yet. Open Setup (⋮ menu) and press "Download" next to the AI model.');
-  const has = (n) => tags.find((t) => t === n || t.split(':')[0] === n.split(':')[0] && n.indexOf(':') < 0);
-  let name = tags.includes(st.ollamaModel) ? st.ollamaModel : (has(st.ollamaModel) || tags[0]);
-  if (wantVision && !ai.isVision(name)) name = tags.find(ai.isVision) || null;
-  return name;
+  // everything else (including old local-model sessions) runs on Groq
+  return { provider: 'groq', name: model && model.startsWith('groq:') ? model.slice(5) : st.groqModel };
 }
 async function streamLLM({ system, messages, image, reqId, onText, onStats, model }) {
   const tStart = Date.now(); let tFirst = 0; const mark = (t) => { if (!tFirst && t) tFirst = Date.now(); onText(t); };
@@ -133,25 +123,13 @@ async function streamLLM({ system, messages, image, reqId, onText, onStats, mode
       stream.on('text', mark);
       await stream.finalMessage();
     } else {
-      let name = await pickOllama(st, !!image), useImage = image;
-      if (!name) { // no vision-capable local model: read the screenshot with free local OCR and send the text instead
-        const text = await ai.ocr(image, path.join(app.getPath('userData'), 'ocr')).catch((e) => { throw new Error('Screenshot text recognition failed (' + e.message + '). First use downloads a small language file — check your internet connection.'); });
+      if (!st.groqKey) throw new Error('Add your free Groq key in Setup (⋮ menu) to get answers.');
+      if (image) { // Groq's fast text models can't see images: read the screenshot with local OCR and send the text
+        const text = await ai.ocr(image, path.join(app.getPath('userData'), 'ocr')).catch((e) => { throw new Error('Screenshot text recognition failed (' + e.message + ').'); });
         messages = messages.map((x, i) => (i === messages.length - 1 ? { ...x, content: x.content + `\n\n# Text read from my screen (OCR, may contain errors)\n${text || '(nothing readable)'}` } : x));
-        useImage = null; name = await pickOllama(st, false);
       }
-      const msgs = [{ role: 'system', content: system }, ...messages.map((x, i) => (useImage && i === messages.length - 1 ? { ...x, images: [useImage] } : x))];
-      // Reasoning is switched off (gpt-oss: 'low') so answers start streaming immediately — speed matters more than long chains of thought in a live call.
-      const chat = (think) => fetch(st.ollamaUrl.replace(/\/$/, '') + '/api/chat', { method: 'POST', signal: ctrl.signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: name, messages: msgs, stream: true, keep_alive: '30m', ...(think === undefined ? {} : { think }), options: { num_ctx: 8192 } }) });
-      let res = await chat(/gpt-oss/i.test(name) ? 'low' : false);
-      if (res.status === 400) res = await chat(); // older Ollama / model without a thinking switch
-      if (!res.ok) throw new Error(`Ollama error ${res.status}: ${await res.text()}`);
-      const reader = res.body.getReader(); const dc = new TextDecoder(); let buf = '';
-      for (;;) {
-        const { done, value } = await reader.read(); if (done) break;
-        buf += dc.decode(value, { stream: true });
-        const lines = buf.split('\n'); buf = lines.pop();
-        for (const ln of lines) { if (!ln.trim()) continue; try { const j = JSON.parse(ln); if (j.message?.content) mark(j.message.content); if (j.done && onStats) onStats({ ttft: tFirst ? tFirst - tStart : null, tps: j.eval_count && j.eval_duration ? Math.round((j.eval_count / (j.eval_duration / 1e9)) * 10) / 10 : null, promptTokens: j.prompt_eval_count || null, loadMs: j.load_duration ? Math.round(j.load_duration / 1e6) : null }); } catch {} }
-      }
+      const stats = await ai.groqChatWithFallback({ key: st.groqKey, model: m.name, system, messages, signal: ctrl.signal, onText: mark });
+      onStats && onStats({ ...stats, ttft: tFirst ? tFirst - tStart : stats.ttft });
     }
   } finally { aborts.delete(reqId); }
 }
@@ -177,27 +155,18 @@ function registerIpc() {
   });
   ipcMain.handle('deepgram:key', () => getSettings(false).deepgramKey);
 
-  // ---- free local engines: status, downloads, speech-to-text ----
-  const progress = (e, d) => send(BrowserWindow.fromWebContents(e.sender), 'setup:progress', d);
-  ipcMain.handle('setup:status', async (_e, lang) => {
-    const st = getSettings(false); let ollama;
-    try { const models = await ai.ollamaTags(st.ollamaUrl); const want = st.ollamaModel; const have = models.includes(want) ? want : models[0] || ''; ollama = { ok: true, models, model: have, wanted: want, ready: !!have, vision: models.some(ai.isVision) }; }
-    catch { ollama = { ok: false, models: [], model: '', wanted: st.ollamaModel, ready: false }; }
-    const ramGB = Math.round(os.totalmem() / 1e9);
-    return { ramGB, ollama, stt: { ready: ai.sttReady(lang || st.language, st.sttQuality), model: ai.sttModelFor(lang || st.language, st.sttQuality), quality: st.sttQuality }, cloud: { anthropic: !!st.anthropicKey, deepgram: !!st.deepgramKey, sttEngine: st.stt } };
-  });
-  ipcMain.handle('ollama:warm', async (_e, sid) => { const st = getSettings(false); try { const n = await pickOllama(st, false); if (!n) return false; const db = load(); const s = sid && db.sessions.find((x) => x.id === sid); return ai.ollamaWarm(st.ollamaUrl, n, s ? buildSystem(s, db, true) : null); } catch { return false; } });
-  ipcMain.handle('ollama:pull', async (e, name) => { const st = getSettings(false); await ai.ollamaPull(st.ollamaUrl, name, (pct, status) => progress(e, { kind: 'ollama', pct, status })); return true; });
-  ipcMain.handle('stt:init', async (e, lang) => { await ai.sttInit(lang, (pct) => progress(e, { kind: 'stt', pct }), getSettings(false).sttQuality); return true; });
-  ipcMain.handle('stt:transcribe', (_e, samples, lang) => ai.sttTranscribe(samples, lang, getSettings(false).sttQuality));
-  ipcMain.handle('app:openExternal', (_e, url) => { if (/^https:\/\/(ollama\.com|huggingface\.co)\//.test(url)) shell.openExternal(url); });
+  // ---- cloud engines: status, key checks, speech-to-text ----
+  ipcMain.handle('setup:status', () => { const st = getSettings(false); return { groq: !!st.groqKey, deepgram: !!st.deepgramKey, anthropic: !!st.anthropicKey, sttEngine: st.stt === 'deepgram' && st.deepgramKey ? 'deepgram' : 'groq', groqModel: st.groqModel, models: ai.GROQ_MODELS }; });
+  ipcMain.handle('setup:test', (_e, which) => { const st = getSettings(false); return which === 'deepgram' ? ai.testDeepgram(st.deepgramKey) : ai.testGroq(st.groqKey); });
+  ipcMain.handle('stt:transcribe', (_e, samples, lang) => { const st = getSettings(false); if (!st.groqKey) throw new Error('Add your free Groq key in Setup'); return ai.groqTranscribe(st.groqKey, samples, lang); });
+  ipcMain.handle('app:openExternal', (_e, url) => { if (/^https:\/\/(console\.groq\.com|console\.deepgram\.com|console\.anthropic\.com)\//.test(url)) shell.openExternal(url); });
 
   ipcMain.handle('sessions:list', () => load().sessions.map(({ transcript, messages, ...r }) => ({ ...r, lines: (transcript || []).length, answers: Math.floor((messages || []).length / 2) })).sort((a, b) => b.createdAt - a.createdAt));
   ipcMain.handle('sessions:get', (_e, sid) => load().sessions.find((s) => s.id === sid));
   ipcMain.handle('sessions:create', (_e, data) => {
     const db = load(); const st = db.settings;
     const s = { id: id(), type: 'interview', title: '', company: '', role: '', description: '', jobDescription: '', notes: '', resumeId: null, docIds: [], folderPath: '',
-      language: st.language || 'en', model: 'ollama:local', prefs: { style: 'concise', format: 'speakable', code: true }, autoGenerate: false, saveTranscript: true,
+      language: st.language || 'en', model: 'groq:openai/gpt-oss-120b', prefs: { style: 'concise', format: 'speakable', code: true }, autoGenerate: false, saveTranscript: true,
       status: 'ready', usageMs: 0, transcript: [], messages: [], summary: '', createdAt: Date.now(), ...data };
     db.sessions.push(s); save(db); return s;
   });
@@ -238,7 +207,7 @@ function registerIpc() {
     const sender = e.sender; const w = BrowserWindow.fromWebContents(sender);
     const db = load(); const s = db.sessions.find((x) => x.id === sessionId); if (!s) throw new Error('Session not found');
     const reqId = id();
-    const local = resolveModel(s.model).provider === 'ollama';
+    const local = resolveModel(s.model).provider !== 'anthropic'; // compact prompts for Groq's free tier
     const tx = (transcript || []).slice(local ? -16 : -60).map((l) => `${l.speaker}: ${l.text}`).join('\n').slice(local ? -2500 : -20000);
     const q = (question && question.trim()) || (image ? 'Analyze this screenshot and help me answer or solve what it shows.' : 'Based on the latest part of the conversation, what should I say next?');
     const content = `# Live transcript (most recent)\n${tx || '(no transcript yet)'}\n\n# Request\n${q}`;
@@ -333,7 +302,6 @@ function openDashboard(hash) {
 }
 
 app.whenReady().then(() => {
-  ai.setCacheDir(path.join(app.getPath('userData'), 'models'));
   nativeTheme.themeSource = getSettings(false).theme || 'light';
   // lets the renderer capture system (loopback) audio for the "Interviewer" channel
   session.defaultSession.setDisplayMediaRequestHandler(async (_req, cb) => {

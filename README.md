@@ -2,17 +2,22 @@
 
 A private, self-hosted AI copilot for interviews and calls (Electron). Your data stays on your computer; API keys are encrypted with your OS keychain.
 
-## Free by default (v0.2)
+## Fast cloud mode (v0.4)
 
-Cue now runs with **no paid keys**:
+Cue runs its AI in the cloud on **free tiers**, so answers start in about a second and your laptop stays cool:
 
-| Job | Free engine | One-time setup |
+| Job | Engine | Cost |
 |---|---|---|
-| Answers | **Ollama** (local LLM, default `gemma3:4b`) | Install Ollama from ollama.com, then press *Download* in Cue's Setup screen |
-| Live transcription | **Whisper** (runs on your CPU via `@huggingface/transformers`) | Press *Download* (~80 MB) in Setup |
-| Screenshots | Vision model if installed (Gemma 3 can), otherwise built-in OCR (`tesseract.js`) | none |
+| Answers | **Groq** — GPT-OSS 120B by default (falls back to Llama 3.3 70B → GPT-OSS 20B → Llama 3.1 8B if a free-tier limit is hit) | Free tier |
+| Transcription | **Groq Whisper** (same key, text ~1 s after each sentence) or **Deepgram Nova-3** (live word-by-word, $200 free credit) | Free |
+| Screenshots | Local OCR (`tesseract.js`), text sent to the answer model | Free |
+| Optional | Anthropic Claude (paid key) | Pay per use |
 
-Anthropic Claude and Deepgram are still supported as **optional cloud engines** (Settings → Cloud engines). Leave them empty and nothing leaves your computer.
+**Setup:** create a free key at [console.groq.com/keys](https://console.groq.com/keys) → open Cue → ⋮ → *Setup & Settings* → paste the key → Save. That's it.
+
+**Privacy:** call audio and the questions (plus a trimmed copy of your resume/JD for context) are sent to Groq (and Deepgram if enabled). Sessions, resumes and documents are stored only on your computer.
+
+Free-tier limits change; check yours at console.groq.com/settings/limits.
 
 ### Rebranding
 Name and logo live in `renderer/brand.js` (`BRAND.name`, `BRAND.mark`). `node tools/render-sheet.js` renders the logo option sheet.

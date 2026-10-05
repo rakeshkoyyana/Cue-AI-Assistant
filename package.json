@@ -1,7 +1,7 @@
 {
   "name": "cue",
-  "version": "0.1.0",
-  "description": "Cue \u2014 a private, self-hosted AI copilot for interviews and meetings",
+  "version": "0.4.0",
+  "description": "Cue AI \u2014 a self-hosted interview and meeting copilot (fast cloud mode on free tiers)",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -11,7 +11,6 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.60.0",
-    "@huggingface/transformers": "^4.3.0",
     "mammoth": "^1.8.0",
     "pdf-parse": "^1.1.1",
     "tesseract.js": "^7.0.0"
@@ -28,13 +27,9 @@
     "files": [
       "main.js",
       "preload.js",
+      "cloud.js",
       "renderer/**/*",
       "package.json"
-    ],
-    "asarUnpack": [
-      "node_modules/onnxruntime-node/**",
-      "node_modules/sharp/**",
-      "node_modules/@img/**"
     ]
   }
 }

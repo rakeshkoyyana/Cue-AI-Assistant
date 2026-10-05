@@ -34,15 +34,20 @@ function popMenu(anchor, html, onMount) {
 
 const LANGS = { en: 'English', es: 'Spanish', fr: 'French', de: 'German', hi: 'Hindi', pt: 'Portuguese', it: 'Italian', nl: 'Dutch', ja: 'Japanese', ko: 'Korean', zh: 'Chinese', ru: 'Russian' };
 // Free local AI is always first; cloud models only appear once an API key has been added (optional, future scope).
-const modelList = (S = {}) => [{ id: 'ollama:local', label: 'Local AI (free)' }].concat(S.anthropicKey ? [
-  { id: 'anthropic:claude-sonnet-5-5', label: 'Claude Sonnet 5.5 (cloud)' }, { id: 'anthropic:claude-opus-5-5', label: 'Claude Opus 5.5 (cloud)' }, { id: 'anthropic:claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 (cloud)' }] : []);
+// Groq models are always available (free tier); Claude appears once an Anthropic key is added.
+const GROQ_MODEL_LIST = [
+  { id: 'groq:openai/gpt-oss-120b', label: 'GPT-OSS 120B · best answers' }, { id: 'groq:llama-3.3-70b-versatile', label: 'Llama 3.3 70B · natural tone' },
+  { id: 'groq:openai/gpt-oss-20b', label: 'GPT-OSS 20B · fastest' }, { id: 'groq:llama-3.1-8b-instant', label: 'Llama 3.1 8B · highest daily limit' }];
+const DEFAULT_MODEL = GROQ_MODEL_LIST[0].id;
+const modelList = (S = {}) => GROQ_MODEL_LIST.concat(S.anthropicKey ? [
+  { id: 'anthropic:claude-sonnet-5-5', label: 'Claude Sonnet 5.5 (paid)' }, { id: 'anthropic:claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 (paid)' }] : []);
 const brandHTML = () => `${mark(BRAND.mark, 22)}<span>${BRAND.name}</span>${BRAND.suffix ? `<span class="ai">${BRAND.suffix}</span>` : ''}`;
 
 // Live transcription over Deepgram's streaming API. One Channel per audio source.
 class Channel {
   constructor(label, onLine, onInterim, lang, key) { Object.assign(this, { label, onLine, onInterim, lang, key }); }
   async start(stream) {
-    const url = `wss://api.deepgram.com/v1/listen?model=nova-2&language=${encodeURIComponent(this.lang)}&smart_format=true&interim_results=true&endpointing=500`;
+    const url = `wss://api.deepgram.com/v1/listen?model=nova-3&language=${encodeURIComponent(this.lang)}&smart_format=true&interim_results=true&endpointing=500`;
     this.ws = new WebSocket(url, ['token', this.key]);
     await new Promise((res, rej) => { this.ws.onopen = res; this.ws.onerror = () => rej(new Error('Deepgram connection failed — check your key in Settings')); });
     this.ws.onmessage = (m) => {
@@ -59,55 +64,54 @@ class Channel {
 }
 
 // ---------- model/engine setup checklist (used on the Connect and Settings screens) ----------
-let progressSink = null; // shared with the live overlay
-cue.setup.onProgress((p) => progressSink && progressSink(p));
-const MODEL_CATALOG = [ // all run on Ollama; vision = can read screenshots directly
-  { name: 'qwen3.5:4b', label: 'Qwen 3.5 · 4B', note: '~3.3 GB · light and quick · fine on 8 GB RAM', min: 6 },
-  { name: 'qwen3.5:9b', label: 'Qwen 3.5 · 9B', note: '~7 GB · fast and sharp, the "flash-lite" tier · 12 GB+', min: 12 },
-  { name: 'gemma4:12b', label: 'Gemma 4 · 12B', note: '~8 GB · natural speaking tone, reads screenshots · 12 GB+', min: 12 },
-  { name: 'gpt-oss:20b', label: 'GPT-OSS · 20B', note: '~14 GB · strongest reasoning that fits 16 GB RAM', min: 16 },
-  { name: 'gemma4:26b', label: 'Gemma 4 · 26B MoE', note: '~17 GB · near-frontier yet fast (4B active) · 24 GB+', min: 24 },
-];
-const recommendedModel = (ram) => (ram >= 24 ? 'gemma4:26b' : ram >= 12 ? 'qwen3.5:9b' : 'qwen3.5:4b');
-async function setupPanel(host, lang, onChange = () => {}) {
-  const st = await cue.setup.status(lang); const o = st.ollama;
-  const rec = recommendedModel(st.ramGB); const MODEL_CHOICES = MODEL_CATALOG.filter((m) => m.min <= st.ramGB + 2 || m.name === rec);
-  const dg = st.cloud.sttEngine === 'deepgram' && st.cloud.deepgram;
-  const ollamaRow = !o.ok
-    ? `<div class="chk warn"><div class="st">${ic('circle-alert', 16)}</div><div class="grow"><div class="t">Local AI engine · Ollama</div><div class="s">Not detected. Install Ollama (free), open it once, then re-check. Everything stays on your computer.</div><div class="acts"><button class="btn sm" data-a="getollama">${ic('external-link', 14)}Get Ollama</button><button class="btn ghost sm" data-a="recheck">${ic('refresh-cw', 14)}Re-check</button></div></div></div>`
-    : !o.ready
-      ? `<div class="chk warn"><div class="st">${ic('download', 16)}</div><div class="grow"><div class="t">AI model</div><div class="s">Ollama is running. Download a model to start (one time).</div><div class="acts">${MODEL_CHOICES.map((m) => `<button class="btn sm ${m.name === rec ? 'primary' : 'ghost'}" data-pull="${m.name}" title="${m.note}">${m.label}${m.name === rec ? ' · recommended' : ''}</button>`).join('')}</div><div class="s" style="margin-top:8px">Your computer has ~${st.ramGB} GB RAM. ${MODEL_CATALOG.find((m) => m.name === rec).note}</div><div class="bar" id="ob" style="display:none"><i></i></div></div></div>`
-      : `<div class="chk ok"><div class="st">${ic('check', 16)}</div><div class="grow"><div class="t">AI model ready</div><div class="s">${esc(o.model)} · ${o.vision ? 'reads screenshots directly' : 'screenshots are read with built-in OCR'}</div><div class="acts"><select id="mdl" style="width:auto;height:30px;font-size:12.5px">${o.models.map((m) => `<option ${m === o.model ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select><button class="btn ghost sm" data-a="more">${ic('plus', 14)}Get another model</button></div><div class="bar" id="ob" style="display:none"><i></i></div></div></div>`;
-  const sttRow = dg ? `<div class="chk ok"><div class="st">${ic('cloud', 16)}</div><div class="grow"><div class="t">Speech recognition · Deepgram (cloud)</div><div class="s">Using your Deepgram key. Switch back to the free local engine in Settings.</div></div></div>`
-    : st.stt.ready ? `<div class="chk ok"><div class="st">${ic('check', 16)}</div><div class="grow"><div class="t">Speech recognition ready</div><div class="s">Whisper runs on your CPU — audio never leaves this computer.</div></div></div>`
-      : `<div class="chk warn"><div class="st">${ic('audio-lines', 16)}</div><div class="grow"><div class="t">Speech model · Whisper</div><div class="s">One-time download (~40 MB) so Cue can transcribe the call on your computer.</div><div class="acts"><button class="btn sm primary" data-a="stt">${ic('download', 14)}Download</button></div><div class="bar" id="sb" style="display:none"><i></i></div></div></div>`;
-  host.innerHTML = ollamaRow + sttRow;
-  const bar = (id, pct) => { const b = $(id, host); if (b) { b.style.display = 'block'; b.firstChild.style.width = (pct ?? 5) + '%'; } };
-  const busy = (b, on) => host.querySelectorAll('button').forEach((x) => (x.disabled = on));
+// ---------- engine setup checklist (Connect screen, Settings, dashboard) ----------
+async function setupPanel(host, _lang, onChange = () => {}) {
+  const st = await cue.setup.status();
+  const keyForm = (id, ph, link, linkLabel) => `<div class="row" style="margin-top:9px"><input id="${id}" type="password" placeholder="${ph}" style="height:32px" /><button class="btn sm primary" data-save="${id}" style="flex:none">Save</button></div><div class="acts"><button class="btn ghost sm" data-open="${link}">${ic('external-link', 14)}${linkLabel}</button></div>`;
+  const groqRow = !st.groq
+    ? `<div class="chk warn"><div class="st">${ic('zap', 16)}</div><div class="grow"><div class="t">Groq · answers + transcription</div><div class="s">Free key, about a minute: sign in at console.groq.com → <b>API Keys</b> → <b>Create API Key</b>, then paste it here.</div>${keyForm('gk', 'gsk_…', 'https://console.groq.com/keys', 'Get a free Groq key')}</div></div>`
+    : `<div class="chk" id="groqRow"><div class="st">${ic('loader-circle', 16, 'spin')}</div><div class="grow"><div class="t">Groq</div><div class="s">Checking your key…</div></div></div>`;
+  const sttRow = st.sttEngine === 'deepgram'
+    ? `<div class="chk" id="dgRow"><div class="st">${ic('loader-circle', 16, 'spin')}</div><div class="grow"><div class="t">Transcription · Deepgram</div><div class="s">Checking your key…</div></div></div>`
+    : `<div class="chk ${st.groq ? 'ok' : ''}"><div class="st">${ic(st.groq ? 'check' : 'audio-lines', 16)}</div><div class="grow"><div class="t">Transcription · Groq Whisper</div><div class="s">Uses the same Groq key. Text appears about a second after each sentence. For live word-by-word captions, add a Deepgram key under <b>More engines</b>.</div></div></div>`;
+  host.innerHTML = groqRow + sttRow;
+  const mark = (row, ok, title, msg) => { if (!row) return; row.className = 'chk ' + (ok ? 'ok' : 'warn'); row.querySelector('.st').innerHTML = ic(ok ? 'check' : 'circle-alert', 16); row.querySelector('.t').textContent = title; row.querySelector('.s').innerHTML = msg; };
+  if (st.groq) cue.setup.test('groq').then((r) => mark($('#groqRow', host), r.ok, r.ok ? 'Groq connected' : 'Groq key problem', r.ok ? 'Answers stream from Groq’s free tier — usually starting in about a second.' : `${esc(r.error)} <button class="btn ghost sm" data-a="regroq" style="margin-top:8px">Replace key</button>`));
+  if (st.sttEngine === 'deepgram') cue.setup.test('deepgram').then((r) => mark($('#dgRow', host), r.ok, r.ok ? 'Transcription · Deepgram (live captions)' : 'Deepgram key problem', r.ok ? 'Word-by-word live transcription.' : esc(r.error)));
   host.onclick = async (e) => {
     const t = e.target.closest('button'); if (!t) return;
-    if (t.dataset.a === 'getollama') cue.setup.open('https://ollama.com/download');
-    if (t.dataset.a === 'recheck') { await setupPanel(host, lang, onChange); onChange(); }
-    if (t.dataset.a === 'more') { host.insertAdjacentHTML('beforeend', `<div class="chk"><div class="st">${ic('plus', 16)}</div><div class="grow"><div class="t">Download another model</div><div class="acts">${MODEL_CHOICES.map((m) => `<button class="btn ghost sm" data-pull="${m.name}" title="${m.note}">${m.label}</button>`).join('')}</div></div></div>`); t.remove(); }
-    if (t.dataset.pull) {
-      busy(t, true); progressSink = (p) => p.kind === 'ollama' && bar('#ob', p.pct); bar('#ob', 3);
-      try { await cue.setup.pullModel(t.dataset.pull); await cue.settings.set({ ollamaModel: t.dataset.pull }); toast('Model ready'); } catch (err) { toast(err.message, 6000); }
-      progressSink = null; await setupPanel(host, lang, onChange); onChange();
-    }
-    if (t.dataset.a === 'stt') {
-      busy(t, true); progressSink = (p) => p.kind === 'stt' && bar('#sb', p.pct); bar('#sb', 3);
-      try { await cue.setup.initStt(lang); toast('Speech model ready'); } catch (err) { toast('Download failed: ' + err.message + ' — check your internet connection.', 7000); }
-      progressSink = null; await setupPanel(host, lang, onChange); onChange();
+    if (t.dataset.open) cue.setup.open(t.dataset.open);
+    if (t.dataset.a === 'regroq') { await cue.settings.set({ groqKey: '' }); await setupPanel(host, _lang, onChange); }
+    if (t.dataset.save) {
+      const v = $('#' + t.dataset.save, host).value.trim(); if (!v) return toast('Paste the key first');
+      await cue.settings.set({ groqKey: v }); const r = await cue.setup.test('groq');
+      if (!r.ok) { toast(r.error, 6000); await cue.settings.set({ groqKey: '' }); return; }
+      toast('Groq connected'); await setupPanel(host, _lang, onChange); onChange();
     }
   };
-  const sel = $('#mdl', host); if (sel) sel.onchange = async () => { await cue.settings.set({ ollamaModel: sel.value }); toast('Using ' + sel.value, 1500); };
   return st;
 }
+// Settings form shared by the widget and the dashboard.
+const settingsFormHTML = (S) => `<div id="chk"></div>
+  <details class="adv"><summary>${ic('layers', 16)}More engines (optional)${ic('chevron-down', 16)}</summary><div>
+    <label class="lbl">Default answer model</label><select id="groqModel">${GROQ_MODEL_LIST.map((m) => `<option value="${m.id.slice(5)}">${m.label}</option>`).join('')}</select>
+    <label class="lbl">Transcription engine</label><select id="stt"><option value="groq">Groq Whisper (free, ~1 s after each sentence)</option><option value="deepgram">Deepgram (live word-by-word, $200 free credit)</option></select>
+    <label class="lbl">Deepgram API key <small>(console.deepgram.com)</small></label><input id="deepgramKey" type="password" value="${esc(S.deepgramKey)}" />
+    <label class="lbl">Anthropic API key <small>(paid, optional)</small></label><input id="anthropicKey" type="password" value="${esc(S.anthropicKey)}" placeholder="sk-ant-…" />
+    <p class="mute" style="font-size:12px;margin:10px 0 0">Keys are encrypted with your OS keychain and only sent to that provider.</p></div></details>`;
+function bindSettingsForm(root, S) {
+  $('#groqModel', root).value = S.groqModel || 'openai/gpt-oss-120b'; $('#stt', root).value = S.stt === 'deepgram' ? 'deepgram' : 'groq';
+  setupPanel($('#chk', root));
+  return async () => {
+    const patch = {}; ['groqModel', 'stt', 'deepgramKey', 'anthropicKey'].forEach((k) => (patch[k] = $('#' + k, root).value));
+    if (patch.stt === 'deepgram' && !patch.deepgramKey) { patch.stt = 'groq'; toast('Add a Deepgram key to use Deepgram — keeping Groq Whisper', 4000); }
+    return cue.settings.set(patch);
+  };
+}
 
-
-// Free live transcription: runs Whisper locally (main process) on speech segments cut by a simple voice-activity detector.
-// Shows interim text every ~1.6 s while someone talks, and a final line after ~0.7 s of silence.
-class LocalChannel {
+// Transcription by speech segments: a simple voice-activity detector cuts each sentence (~0.7 s of silence ends it)
+// and sends it to Groq Whisper. Shows "…" while someone is talking.
+class SegmentChannel {
   constructor(label, onLine, onInterim, lang) { Object.assign(this, { label, onLine, onInterim, lang }); this.tx = (a, l) => cue.stt.transcribe(a, l); this.onPerf = null; }
   async start(stream) {
     this.stream = stream; this.ctx = new AudioContext({ sampleRate: 16000 });

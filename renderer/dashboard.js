@@ -11,7 +11,7 @@ if (MODE === 'dashboard') (() => {
   function frame(title, sub, body, action = '') {
     app.innerHTML = `<div class="dash view"><aside class="sb"><div class="brand">${brandHTML()}</div><button class="btn primary" id="newSess">${ic('plus', 16)}Create Session</button>
       <div class="grp">Call Assistant</div><div class="nav">${NAV.map(link).join('')}</div><div class="grp">Prepare</div><div class="nav">${PREP.map(link).join('')}</div>
-      <div class="foot"><b>${ic('shield-check', 15)}Free &amp; private</b>Runs on your computer. Unlimited sessions, and nothing leaves this machine unless you add a cloud key.<div class="gap"></div><button class="btn ghost sm" id="gear">${ic('settings', 14)}Setup &amp; Settings</button></div></aside>
+      <div class="foot"><b>${ic('zap', 15)}Fast cloud mode</b>Answers and transcription run on Groq's free tier. Sessions, resumes and documents stay on this computer.<div class="gap"></div><button class="btn ghost sm" id="gear">${ic('settings', 14)}Setup &amp; Settings</button></div></aside>
       <section class="mainc"><div class="pagehd"><div class="grow"><h1>${title}</h1><p>${sub}</p></div>${action}</div><div class="pagebd" id="bd">${body}</div></section></div>`;
     $$('.nav a').forEach((a) => (a.onclick = () => { page = a.dataset.p; st.tab = 'all'; st.q = ''; render(); }));
     $('#newSess').onclick = () => cue.win.startSession('__new');
@@ -141,14 +141,10 @@ if (MODE === 'dashboard') (() => {
   // ---------------- settings modal ----------------
   async function settingsModal() {
     const S = await cue.settings.get();
-    modal(`<div class="row"><b class="grow" style="font-size:17px;letter-spacing:-.02em">Setup &amp; Settings</b><button class="ib" data-x>${ic('x', 16)}</button></div><p class="mute" style="margin:4px 0 14px">${BRAND.name} runs fully on your computer for free. Cloud engines are optional.</p><div id="chk"></div>
-      <details class="adv"><summary>${ic('cloud', 16)}Cloud engines (optional)${ic('chevron-down', 16)}</summary><div>
-        <label class="lbl">Anthropic API key</label><input id="anthropicKey" type="password" value="${esc(S.anthropicKey)}" placeholder="sk-ant-…" />
-        <label class="lbl">Deepgram API key</label><input id="deepgramKey" type="password" value="${esc(S.deepgramKey)}" />
-        <label class="lbl">Speech recognition engine</label><select id="stt"><option value="local">Local Whisper (free)</option><option value="deepgram">Deepgram (cloud, needs key)</option></select></div></details>
+    modal(`<div class="row"><b class="grow" style="font-size:17px;letter-spacing:-.02em">Setup &amp; Settings</b><button class="ib" data-x>${ic('x', 16)}</button></div><p class="mute" style="margin:4px 0 14px">Fast cloud mode: answers and transcription run on Groq's free tier.</p>${settingsFormHTML(S)}
       <div class="row" style="margin-top:16px;justify-content:flex-end"><button class="btn primary" id="save">Save</button></div>`, (b, close) => {
-      $('[data-x]', b).onclick = close; $('#stt', b).value = S.stt || 'local'; setupPanel($('#chk', b), S.language);
-      $('#save', b).onclick = async () => { const patch = {}; ['anthropicKey', 'deepgramKey', 'stt'].forEach((k) => (patch[k] = $('#' + k, b).value)); await cue.settings.set(patch); toast('Saved'); close(); };
+      $('[data-x]', b).onclick = close; const saveForm = bindSettingsForm(b, S);
+      $('#save', b).onclick = async () => { await saveForm(); toast('Saved'); close(); };
     });
   }
 

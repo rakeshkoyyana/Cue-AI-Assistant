@@ -2,15 +2,27 @@
 const { app, BrowserWindow } = require('electron'); const fs = require('fs'); const http = require('http'); const path = require('path');
 const OUT = process.env.OUT || '/tmp/shots'; fs.mkdirSync(OUT, { recursive: true });
 app.setPath('userData', fs.mkdtempSync('/tmp/cue-test-'));
+process.env.CUE_GROQ_URL = 'http://127.0.0.1:11434';
 require('../main.js');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-// --- mock Ollama ---
+// --- mock Groq (OpenAI-compatible) ---
+global.__models = []; let first429 = true;
 const mock = http.createServer((req, res) => {
-  if (req.url === '/api/tags') { res.end(JSON.stringify({ models: [{ name: 'gemma3:4b' }, { name: 'llama3.2:3b' }] })); return; }
-  if (req.url === '/api/chat') { let b = ''; req.on('data', (c) => (b += c)); req.on('end', async () => { const j = JSON.parse(b); global.__lastChat = j; const words = 'I led the migration of our nightly pipelines to **PySpark on Databricks**, cutting runtime by about half. The key was partitioning on event date and caching the dimension tables.'.split(' ');
-      res.write(''); for (const w of words) { res.write(JSON.stringify({ message: { content: w + ' ' } }) + '\n'); await sleep(15); } res.end(JSON.stringify({ done: true, eval_count: 40, eval_duration: 2.5e9, prompt_eval_count: 1234, load_duration: 5e8 }) + '\n'); }); return; }
-  res.statusCode = 404; res.end();
+  let b = ''; req.on('data', (c) => (b += c)); req.on('end', async () => {
+    if (req.headers.authorization !== 'Bearer gsk_test') { res.statusCode = 401; res.end('{"error":{"message":"bad key"}}'); return; }
+    if (req.url === '/openai/v1/models') { res.end('{"data":[]}'); return; }
+    if (req.url === '/openai/v1/audio/transcriptions') { global.__wavOk = b.includes('RIFF') && b.includes('whisper-large-v3-turbo'); res.end('{"text":"Tell me about yourself."}'); return; }
+    if (req.url === '/openai/v1/chat/completions') {
+      const j = JSON.parse(b); global.__lastChat = j; global.__models.push(j.model);
+      if (j.model === 'openai/gpt-oss-120b' && first429) { first429 = false; res.statusCode = 429; res.setHeader('retry-after', '7'); res.end('{"error":{"message":"rate limit"}}'); return; }
+      res.setHeader('content-type', 'text/event-stream');
+      for (const w of 'I led the migration of our nightly pipelines to **PySpark on Databricks**, cutting runtime by about half.'.split(' ')) { res.write('data: ' + JSON.stringify({ choices: [{ delta: { content: w + ' ' } }] }) + '\n\n'); await sleep(10); }
+      res.write('data: ' + JSON.stringify({ choices: [{ delta: {} }], x_groq: { usage: { prompt_tokens: 812, completion_tokens: 40, completion_time: 0.08 } } }) + '\n\n'); res.end('data: [DONE]\n\n'); return;
+    }
+    res.statusCode = 404; res.end();
+  });
 }).listen(11434);
+process.env.CUE_GROQ_URL = 'http://127.0.0.1:11434';
 const logs = [];
 app.whenReady().then(async () => {
   try {
@@ -21,6 +33,8 @@ app.whenReady().then(async () => {
     const shot = async (win, name) => { console.log('shot', name); await sleep(450); const img = await win.webContents.capturePage(); fs.writeFileSync(`${OUT}/${name}.png`, img.toPNG()); };
     const click = (sel) => js(`document.querySelector(${JSON.stringify(sel)}).click()`);
     await shot(w, '01-empty');
+    await js(`cue.settings.set({groqKey:'gsk_test'})`);
+    const tr = await js(`cue.stt.transcribe(new Float32Array(16000).map((_, i) => Math.sin(i / 5) * 0.2), 'en')`); console.log('transcribe:', JSON.stringify(tr), 'wavOk', global.__wavOk);
     // seed
     await js(`(async()=>{
       const r = await cue.docs.addText('resume','Rakesh_Koyyana_Resume.pdf','Data engineer. AbbVie. PySpark, Databricks, AWS Glue. Built ETL pipelines.','uploaded');
@@ -43,7 +57,7 @@ app.whenReady().then(async () => {
     await click('#bChat'); await js(`(()=>{const i=document.querySelector('#chatIn');i.value='Tell me about a pipeline you optimised';i.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter'}))})()`);
     await sleep(2200); await shot(w, '07-live-answer');
     // VAD test with synthetic audio and a stubbed transcriber
-    const vad = await js(`(async()=>{ const lines=[]; const c=new LocalChannel('Interviewer',(w,t)=>lines.push(t),()=>{},'en'); c.tx=async(a)=>({text:'heard '+Math.round(a.length/1600)+' frames',ms:900});
+    const vad = await js(`(async()=>{ const lines=[]; const c=new SegmentChannel('Interviewer',(w,t)=>lines.push(t),()=>{},'en'); c.tx=async(a)=>({text:'heard '+Math.round(a.length/1600)+' frames',ms:900});
       Object.assign(c,{acc:[],accN:0,pre:[],seg:[],speech:false,quiet:0,voiced:0,noise:0.004,sinceInterim:0,seq:0,pending:false,level:0});
       const blk=(amp)=>{ const b=new Float32Array(128); for(let i=0;i<128;i++) b[i]=amp*Math.sin(i/3); return b; };
       for(let i=0;i<13*20;i++) c.feed(blk(0.0005));        // 2.6s silence
@@ -69,7 +83,7 @@ app.whenReady().then(async () => {
     await d.webContents.executeJavaScript(`document.querySelector('[data-p=sessions]').click()`); await sleep(300); await shot(d, '11-dash-sessions-dark');
     await d.webContents.executeJavaScript(`document.querySelector('#gear').click()`); await sleep(500); await shot(d, '12-dash-settings');
   } catch (e) { console.log('TEST ERROR', e); }
-  console.log('chat req:', JSON.stringify({ sysChars: global.__lastChat?.messages?.[0]?.content?.length, msgs: global.__lastChat?.messages?.length, model: global.__lastChat?.model, think: global.__lastChat?.think, keep_alive: global.__lastChat?.keep_alive }));
+  console.log('chat req:', JSON.stringify({ models: global.__models, reasoning: global.__lastChat?.reasoning_effort, sysChars: global.__lastChat?.messages?.[0]?.content?.length }));
   console.log('console problems:\n' + logs.join('\n'));
   app.exit(0);
 });

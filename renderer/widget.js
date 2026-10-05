@@ -60,7 +60,7 @@ if (MODE === 'widget') (() => {
   cue.onGotoLive((sid) => (sid === '__new' ? viewWizard() : viewConnect(sid)));
 
   // ---------------- shell + header ----------------
-  const shell = (inner, cls = '') => `<div class="shell ${cls}"><div class="hdr"><div class="brand">${brandHTML()}</div><span class="tier" title="Runs on your computer — no paid keys needed"><i></i>Free · Local</span>
+  const shell = (inner, cls = '') => `<div class="shell ${cls}"><div class="hdr"><div class="brand">${brandHTML()}</div><span class="tier" title="Fast cloud mode on free tiers"><i></i>Free · Cloud</span>
     <button class="ib" id="hCollapse" title="Hide">${ic('minimize-2', 16)}</button><button class="ib mv" title="Move (${MOD} + ⇧ + ✥)  ·  drag me, or use ${MOD}⇧ + arrow keys during a live session" style="-webkit-app-region:drag;cursor:grab">${ic('move', 16)}</button><button class="ib" id="hMenu" title="Menu">${ic('ellipsis-vertical', 16)}</button><button class="ib close" id="hClose" title="Close">${ic('x', 16)}</button></div>${inner}</div>`;
   function bindHeader() {
     $('#hCollapse').onclick = hide;
@@ -123,7 +123,7 @@ if (MODE === 'widget') (() => {
 
   // ---------------- create-session wizard ----------------
   let draft = null;
-  const freshDraft = (type = 'interview') => ({ type, company: '', role: '', jobDescription: '', title: '', description: '', resumeId: '', docIds: [], folderPath: '', language: S.language || 'en', model: 'ollama:local',
+  const freshDraft = (type = 'interview') => ({ type, company: '', role: '', jobDescription: '', title: '', description: '', resumeId: '', docIds: [], folderPath: '', language: S.language || 'en', model: S.groqModel ? 'groq:' + S.groqModel : DEFAULT_MODEL,
     prefs: { style: 'concise', format: 'speakable', code: true }, notes: '', autoGenerate: false, saveTranscript: true });
 
   async function viewWizard(step = 1) {
@@ -209,10 +209,10 @@ if (MODE === 'widget') (() => {
   async function viewConnect(sid) {
     cue.win.size(540, 640);
     const s = await cue.sessions.get(sid); if (!s) return viewList();
-    view(shell(`<div class="body"><div class="connect"><h2>Connect call session</h2><p class="mute" style="margin:0 0 14px">Unlimited and free — it ends when you stop it.</p>
+    view(shell(`<div class="body"><div class="connect"><h2>Connect call session</h2><p class="mute" style="margin:0 0 14px">Free cloud mode — it ends when you stop it.</p>
       <div id="chk"></div>
       <div class="note warn">${ic('headphones', 16)}<div>To hear the other side of the call, ${BRAND.name} captures your computer's audio. Windows works out of the box. On macOS you need a loopback device such as BlackHole; without it ${BRAND.name} only hears your microphone.</div></div>
-      <div class="note">${ic('shield-check', 16)}<div>Test in a safe environment before the real call. Audio and answers are processed on this computer.</div></div>
+      <div class="note">${ic('shield-check', 16)}<div>Test in a safe environment before the real call. Speech and questions are sent to Groq (and Deepgram if enabled) to transcribe and answer; your sessions and files stay on this computer.</div></div>
       <div class="row" style="margin-top:6px"><button class="btn ghost grow" id="back">Back</button><button class="btn primary grow" id="go">${ic('power', 15)}Connect</button></div></div></div>`)); bindHeader();
     setupPanel($('#chk'), s.language);
     $('#back').onclick = viewList; $('#go').onclick = () => viewLive(sid);
@@ -224,7 +224,7 @@ if (MODE === 'widget') (() => {
     S = await cue.settings.get();
     const lines = []; const interim = {}; const answers = []; let idx = -1; let current = null; let chatMode = false; let pendingQ = []; let autoTimer = null;
     const channels = []; const t0 = Date.now(); const perf = { stt: null };
-    cue.win.size(940, 190); cue.win.liveHotkeys(true); cue.setup.warm(sid); // preload the model and cache this session's context so the first answer starts fast
+    cue.win.size(940, 190); cue.win.liveHotkeys(true);
     await cue.sessions.update(sid, { status: 'live' });
     $('#bubLogo').classList.add('run');
 
@@ -254,14 +254,11 @@ if (MODE === 'widget') (() => {
     const onInterim = (who, text) => { interim[who] = text; refreshLine(); };
 
     // --- audio: free local Whisper by default; Deepgram only if the user chose it and added a key ---
-    const key = S.stt === 'deepgram' ? await cue.deepgramKey() : '';
-    const makeChannel = (label) => (key ? new Channel(label, onLine, onInterim, s.language, key) : new LocalChannel(label, onLine, onInterim, s.language));
+    const key = S.stt === 'deepgram' ? await cue.deepgramKey() : ''; // Deepgram = live captions; otherwise Groq Whisper per sentence
+    const makeChannel = (label) => (key ? new Channel(label, onLine, onInterim, s.language, key) : new SegmentChannel(label, onLine, onInterim, s.language));
     (async () => {
       try {
-        if (!key) {
-          setStatus('Loading speech model…'); progressSink = (p) => p.kind === 'stt' && setStatus(`Downloading speech model… ${p.pct ?? ''}%`);
-          try { await cue.setup.initStt(s.language); } finally { progressSink = null; }
-        }
+        if (!key && !S.groqKey) throw new Error('add your free Groq key in Setup (⋮ menu)');
         const m = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
         const c1 = makeChannel('You'); c1.onPerf = (p) => (perf.stt = p.stt); await c1.start(m); channels.push(c1); $('#dMic')?.classList.add('on');
         try {
@@ -355,23 +352,12 @@ if (MODE === 'widget') (() => {
   // ---------------- settings ----------------
   async function viewSettings() {
     cue.win.size(560, 760); S = await cue.settings.get();
-    view(shell(`<div class="body"><h2 style="margin:4px 0 2px;letter-spacing:-.02em">Setup &amp; Settings</h2><p class="mute" style="margin:0 0 14px">${BRAND.name} runs fully on your computer for free. Cloud engines are optional.</p>
-      <div id="chk"></div>
-      <details class="adv"><summary>${ic('cloud', 16)}Cloud engines (optional)${ic('chevron-down', 16)}</summary><div>
-        <p class="mute" style="margin:0 0 4px;font-size:12.5px">Not needed. Add keys later if you want faster or smarter cloud models. Keys are encrypted with your OS keychain.</p>
-        <label class="lbl">Anthropic API key</label><input id="anthropicKey" type="password" value="${esc(S.anthropicKey)}" placeholder="sk-ant-…" />
-        <label class="lbl">Deepgram API key</label><input id="deepgramKey" type="password" value="${esc(S.deepgramKey)}" />
-        <label class="lbl">Speech recognition engine</label><select id="stt"><option value="local">Local Whisper (free)</option><option value="deepgram">Deepgram (cloud, needs key)</option></select>
-      </div></details>
-      <details class="adv"><summary>${ic('cpu', 16)}Local engine options${ic('chevron-down', 16)}</summary><div><label class="lbl">Speech recognition speed</label><select id="sttQuality"><option value="fast">Fast — Whisper tiny (lightest on your Mac)</option><option value="balanced">Balanced — Whisper base (more accurate, ~2–4x slower)</option></select><label class="lbl">Ollama URL</label><input id="ollamaUrl" value="${esc(S.ollamaUrl)}" /></div></details>
+    view(shell(`<div class="body"><h2 style="margin:4px 0 2px;letter-spacing:-.02em">Setup &amp; Settings</h2><p class="mute" style="margin:0 0 14px">Fast cloud mode: answers and transcription run on Groq's free tier. Nothing heavy runs on your Mac.</p>
+      ${settingsFormHTML(S)}
       <div class="wizfoot"><button class="btn ghost" id="cancel">Back</button><button class="btn primary" id="save">Save</button></div></div>`)); bindHeader();
-    $('#stt').value = S.stt || 'local'; $('#sttQuality').value = S.sttQuality || 'fast';
-    setupPanel($('#chk'), S.language);
+    const saveForm = bindSettingsForm(app, S);
     $('#cancel').onclick = viewList;
-    $('#save').onclick = async () => {
-      const patch = {}; ['anthropicKey', 'deepgramKey', 'stt', 'sttQuality', 'ollamaUrl'].forEach((k) => (patch[k] = $('#' + k).value));
-      patch.provider = patch.anthropicKey ? S.provider : 'ollama'; S = await cue.settings.set(patch); toast('Saved'); viewList();
-    };
+    $('#save').onclick = async () => { S = await saveForm(); toast('Saved'); viewList(); };
   }
 
   viewList();

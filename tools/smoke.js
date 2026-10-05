@@ -64,6 +64,7 @@ app.whenReady().then(async () => {
     await d.webContents.executeJavaScript(`document.querySelector('[data-p=sessions]').click()`); await sleep(300); await shot(d, '11-dash-sessions-dark');
     await d.webContents.executeJavaScript(`document.querySelector('#gear').click()`); await sleep(500); await shot(d, '12-dash-settings');
   } catch (e) { console.log('TEST ERROR', e); }
+  console.log('chat req:', JSON.stringify({ model: global.__lastChat?.model, think: global.__lastChat?.think, keep_alive: global.__lastChat?.keep_alive }));
   console.log('console problems:\n' + logs.join('\n'));
   app.exit(0);
 });

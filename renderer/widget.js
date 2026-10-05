@@ -224,7 +224,7 @@ if (MODE === 'widget') (() => {
     S = await cue.settings.get();
     const lines = []; const interim = {}; const answers = []; let idx = -1; let current = null; let chatMode = false; let pendingQ = []; let autoTimer = null;
     const channels = []; const t0 = Date.now();
-    cue.win.size(940, 190); cue.win.liveHotkeys(true);
+    cue.win.size(940, 190); cue.win.liveHotkeys(true); cue.setup.warm(); // preload the AI model so the first answer is instant
     await cue.sessions.update(sid, { status: 'live' });
     $('#bubLogo').classList.add('run');
 

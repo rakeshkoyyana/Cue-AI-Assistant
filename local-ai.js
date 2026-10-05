@@ -61,13 +61,15 @@ async function ocr(base64, dir) {
 async function ocrStop() { try { await ocrWorker?.terminate(); } catch {} ocrWorker = null; }
 
 // ---------------- Ollama ----------------
-const VISION_RE = /llava|vision|vl\b|-vl|moondream|minicpm-v|gemma3|bakllava|granite3\.2-vision|mistral-small3/i;
+const VISION_RE = /llava|vision|vl\b|-vl|moondream|minicpm-v|gemma[34]|qwen3\.[5-9]|bakllava|granite3\.2-vision|mistral-small3/i;
 const isVision = (name) => VISION_RE.test(name);
 async function ollamaTags(url) {
   const res = await fetch(url.replace(/\/$/, '') + '/api/tags', { signal: AbortSignal.timeout(2500) });
   if (!res.ok) throw new Error('HTTP ' + res.status);
   return ((await res.json()).models || []).map((m) => m.name).filter((n) => !/embed/i.test(n));
 }
+// Loads the model into memory ahead of time so the first answer isn't slow.
+function ollamaWarm(url, name) { return fetch(url.replace(/\/$/, '') + '/api/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: name, keep_alive: '30m' }) }).then(() => true).catch(() => false); }
 async function ollamaPull(url, name, onProgress) {
   const res = await fetch(url.replace(/\/$/, '') + '/api/pull', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: name, stream: true }) });
   if (!res.ok) throw new Error(`Ollama couldn't download ${name}: ${await res.text()}`);
@@ -79,4 +81,4 @@ async function ollamaPull(url, name, onProgress) {
   }
 }
 
-module.exports = { setCacheDir, sttReady, sttInit, sttTranscribe, sttModelFor, ocr, ocrStop, ollamaTags, ollamaPull, isVision };
+module.exports = { setCacheDir, sttReady, sttInit, sttTranscribe, sttModelFor, ocr, ocrStop, ollamaTags, ollamaPull, ollamaWarm, isVision };

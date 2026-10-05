@@ -61,18 +61,22 @@ class Channel {
 // ---------- model/engine setup checklist (used on the Connect and Settings screens) ----------
 let progressSink = null; // shared with the live overlay
 cue.setup.onProgress((p) => progressSink && progressSink(p));
-const MODEL_CHOICES = [
-  { name: 'gemma3:4b', label: 'Gemma 3 · 4B', note: 'Recommended · ~3.3 GB · can read screenshots' },
-  { name: 'llama3.2:3b', label: 'Llama 3.2 · 3B', note: 'Fastest · ~2 GB · any laptop' },
-  { name: 'qwen2.5:7b', label: 'Qwen 2.5 · 7B', note: 'Smarter · ~4.7 GB · wants 16 GB RAM' },
+const MODEL_CATALOG = [ // all run on Ollama; vision = can read screenshots directly
+  { name: 'qwen3.5:4b', label: 'Qwen 3.5 · 4B', note: '~3.3 GB · light and quick · fine on 8 GB RAM', min: 6 },
+  { name: 'qwen3.5:9b', label: 'Qwen 3.5 · 9B', note: '~7 GB · fast and sharp, the "flash-lite" tier · 12 GB+', min: 12 },
+  { name: 'gemma4:12b', label: 'Gemma 4 · 12B', note: '~8 GB · natural speaking tone, reads screenshots · 12 GB+', min: 12 },
+  { name: 'gpt-oss:20b', label: 'GPT-OSS · 20B', note: '~14 GB · strongest reasoning that fits 16 GB RAM', min: 16 },
+  { name: 'gemma4:26b', label: 'Gemma 4 · 26B MoE', note: '~17 GB · near-frontier yet fast (4B active) · 24 GB+', min: 24 },
 ];
+const recommendedModel = (ram) => (ram >= 24 ? 'gemma4:26b' : ram >= 12 ? 'qwen3.5:9b' : 'qwen3.5:4b');
 async function setupPanel(host, lang, onChange = () => {}) {
   const st = await cue.setup.status(lang); const o = st.ollama;
+  const rec = recommendedModel(st.ramGB); const MODEL_CHOICES = MODEL_CATALOG.filter((m) => m.min <= st.ramGB + 2 || m.name === rec);
   const dg = st.cloud.sttEngine === 'deepgram' && st.cloud.deepgram;
   const ollamaRow = !o.ok
     ? `<div class="chk warn"><div class="st">${ic('circle-alert', 16)}</div><div class="grow"><div class="t">Local AI engine · Ollama</div><div class="s">Not detected. Install Ollama (free), open it once, then re-check. Everything stays on your computer.</div><div class="acts"><button class="btn sm" data-a="getollama">${ic('external-link', 14)}Get Ollama</button><button class="btn ghost sm" data-a="recheck">${ic('refresh-cw', 14)}Re-check</button></div></div></div>`
     : !o.ready
-      ? `<div class="chk warn"><div class="st">${ic('download', 16)}</div><div class="grow"><div class="t">AI model</div><div class="s">Ollama is running. Download a model to start (one time).</div><div class="acts">${MODEL_CHOICES.map((m) => `<button class="btn sm ${m.name === 'gemma3:4b' ? 'primary' : 'ghost'}" data-pull="${m.name}" title="${m.note}">${m.label}</button>`).join('')}</div><div class="s" style="margin-top:8px">${MODEL_CHOICES[0].note}</div><div class="bar" id="ob" style="display:none"><i></i></div></div></div>`
+      ? `<div class="chk warn"><div class="st">${ic('download', 16)}</div><div class="grow"><div class="t">AI model</div><div class="s">Ollama is running. Download a model to start (one time).</div><div class="acts">${MODEL_CHOICES.map((m) => `<button class="btn sm ${m.name === rec ? 'primary' : 'ghost'}" data-pull="${m.name}" title="${m.note}">${m.label}${m.name === rec ? ' · recommended' : ''}</button>`).join('')}</div><div class="s" style="margin-top:8px">Your computer has ~${st.ramGB} GB RAM. ${MODEL_CATALOG.find((m) => m.name === rec).note}</div><div class="bar" id="ob" style="display:none"><i></i></div></div></div>`
       : `<div class="chk ok"><div class="st">${ic('check', 16)}</div><div class="grow"><div class="t">AI model ready</div><div class="s">${esc(o.model)} · ${o.vision ? 'reads screenshots directly' : 'screenshots are read with built-in OCR'}</div><div class="acts"><select id="mdl" style="width:auto;height:30px;font-size:12.5px">${o.models.map((m) => `<option ${m === o.model ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select><button class="btn ghost sm" data-a="more">${ic('plus', 14)}Get another model</button></div><div class="bar" id="ob" style="display:none"><i></i></div></div></div>`;
   const sttRow = dg ? `<div class="chk ok"><div class="st">${ic('cloud', 16)}</div><div class="grow"><div class="t">Speech recognition · Deepgram (cloud)</div><div class="s">Using your Deepgram key. Switch back to the free local engine in Settings.</div></div></div>`
     : st.stt.ready ? `<div class="chk ok"><div class="st">${ic('check', 16)}</div><div class="grow"><div class="t">Speech recognition ready</div><div class="s">Whisper runs on your CPU — audio never leaves this computer.</div></div></div>`

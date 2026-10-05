@@ -3,6 +3,7 @@ const ai = require('./local-ai');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const os = require('os');
 
 let widget, dash;
 let collapsed = null; // previous size when collapsed
@@ -12,8 +13,8 @@ const SECRET_KEYS = ['anthropicKey', 'deepgramKey'];
 const defaults = {
   settings: {
     // Free by default: local Ollama for answers + local Whisper for transcription. Cloud keys are optional extras.
-    v: 2, provider: 'ollama', stt: 'local', anthropicKey: '', anthropicModel: 'claude-sonnet-5-5',
-    ollamaUrl: 'http://localhost:11434', ollamaModel: 'gemma3:4b',
+    v: 3, provider: 'ollama', stt: 'local', anthropicKey: '', anthropicModel: 'claude-sonnet-5-5',
+    ollamaUrl: 'http://localhost:11434', ollamaModel: 'qwen3.5:9b',
     deepgramKey: '', language: 'en', theme: 'dark', zoom: 1,
   },
   sessions: [],
@@ -26,7 +27,8 @@ const dec = (v) => (!v ? '' : v.startsWith('enc:') ? safeStorage.decryptString(B
 function load() {
   try {
     const d = JSON.parse(fs.readFileSync(DB_PATH(), 'utf8')); const st = { ...defaults.settings, ...d.settings };
-    if (!st.v || st.v < 2) Object.assign(st, { v: 2, provider: 'ollama', stt: 'local', ollamaModel: 'gemma3:4b', theme: 'dark' }); // v0.1 → v0.2: free-by-default
+    if (!st.v || st.v < 2) Object.assign(st, { provider: 'ollama', stt: 'local', theme: 'dark' }); // v0.1 → v0.2: free-by-default
+    if (!st.v || st.v < 3) { st.v = 3; if (['gemma3:4b', 'llama3.1', 'llama3.2:3b'].includes(st.ollamaModel)) st.ollamaModel = 'qwen3.5:9b'; } // v0.3: newer default model
     return { ...defaults, ...d, settings: st };
   }
   catch { return JSON.parse(JSON.stringify(defaults)); }
@@ -128,7 +130,10 @@ async function streamLLM({ system, messages, image, reqId, onText, model }) {
         useImage = null; name = await pickOllama(st, false);
       }
       const msgs = [{ role: 'system', content: system }, ...messages.map((x, i) => (useImage && i === messages.length - 1 ? { ...x, images: [useImage] } : x))];
-      const res = await fetch(st.ollamaUrl.replace(/\/$/, '') + '/api/chat', { method: 'POST', signal: ctrl.signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: name, messages: msgs, stream: true, options: { num_ctx: 8192 } }) });
+      // Reasoning is switched off (gpt-oss: 'low') so answers start streaming immediately — speed matters more than long chains of thought in a live call.
+      const chat = (think) => fetch(st.ollamaUrl.replace(/\/$/, '') + '/api/chat', { method: 'POST', signal: ctrl.signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: name, messages: msgs, stream: true, keep_alive: '30m', ...(think === undefined ? {} : { think }), options: { num_ctx: 8192 } }) });
+      let res = await chat(/gpt-oss/i.test(name) ? 'low' : false);
+      if (res.status === 400) res = await chat(); // older Ollama / model without a thinking switch
       if (!res.ok) throw new Error(`Ollama error ${res.status}: ${await res.text()}`);
       const reader = res.body.getReader(); const dc = new TextDecoder(); let buf = '';
       for (;;) {
@@ -168,8 +173,10 @@ function registerIpc() {
     const st = getSettings(false); let ollama;
     try { const models = await ai.ollamaTags(st.ollamaUrl); const want = st.ollamaModel; const have = models.includes(want) ? want : models[0] || ''; ollama = { ok: true, models, model: have, wanted: want, ready: !!have, vision: models.some(ai.isVision) }; }
     catch { ollama = { ok: false, models: [], model: '', wanted: st.ollamaModel, ready: false }; }
-    return { ollama, stt: { ready: ai.sttReady(lang || st.language), model: ai.sttModelFor(lang || st.language) }, cloud: { anthropic: !!st.anthropicKey, deepgram: !!st.deepgramKey, sttEngine: st.stt } };
+    const ramGB = Math.round(os.totalmem() / 1e9);
+    return { ramGB, ollama, stt: { ready: ai.sttReady(lang || st.language), model: ai.sttModelFor(lang || st.language) }, cloud: { anthropic: !!st.anthropicKey, deepgram: !!st.deepgramKey, sttEngine: st.stt } };
   });
+  ipcMain.handle('ollama:warm', async () => { const st = getSettings(false); try { const n = await pickOllama(st, false); return n ? ai.ollamaWarm(st.ollamaUrl, n) : false; } catch { return false; } });
   ipcMain.handle('ollama:pull', async (e, name) => { const st = getSettings(false); await ai.ollamaPull(st.ollamaUrl, name, (pct, status) => progress(e, { kind: 'ollama', pct, status })); return true; });
   ipcMain.handle('stt:init', async (e, lang) => { await ai.sttInit(lang, (pct) => progress(e, { kind: 'stt', pct })); return true; });
   ipcMain.handle('stt:transcribe', (_e, samples, lang) => ai.sttTranscribe(samples, lang));

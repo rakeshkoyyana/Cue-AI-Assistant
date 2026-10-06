@@ -45,6 +45,7 @@ Click the ⋮ menu in the widget → **Settings** and add:
 
 **Dashboard window**
 - Call Sessions (Active/Past, tabs, grid/list, View Transcript), Resumes, Documents
+- Session Video: pick a local recording and extract 1 frame/second (max 1280 px wide) with live progress, cancel, and a clear-frames button. Needs `ffmpeg` (`brew install ffmpeg`)
 - Prepare: Question Bank, Mock Interview (AI interviewer speaks questions aloud), Resume Maker
 
 ## Hotkeys (active only during a live session)

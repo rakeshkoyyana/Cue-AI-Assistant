@@ -4,7 +4,7 @@ if (MODE === 'dashboard') (() => {
   cue.onDashNav((p) => { page = p; render(); });
   cue.settings.get().then((s) => applyTheme(s.theme || 'dark'));
 
-  const NAV = [['sessions', 'audio-lines', 'Call Sessions'], ['resumes', 'file-user', 'Resumes'], ['documents', 'folders', 'Documents']];
+  const NAV = [['sessions', 'audio-lines', 'Call Sessions'], ['resumes', 'file-user', 'Resumes'], ['documents', 'folders', 'Documents'], ['video', 'layers', 'Session Video']];
   const PREP = [['questions', 'book-open', 'Question Bank'], ['mock', 'mic', 'Mock Interview'], ['maker', 'wand-sparkles', 'Resume Maker']];
   const link = ([id, icon, label]) => `<a data-p="${id}" class="${page === id ? 'on' : ''}">${ic(icon, 16)}${label}</a>`;
 
@@ -138,6 +138,96 @@ if (MODE === 'dashboard') (() => {
     $('#sv').onclick = async () => { await cue.docs.addText('resume', $('#nm').value || 'Tailored resume', $('#txt').value, 'maker'); toast('Saved to Resumes'); page = 'resumes'; render(); };
   }
 
+  // ---------------- Session Video (local recording -> 1 fps frames) ----------------
+  // Job state lives here, outside render(): render() rebuilds the whole page, so anything stored in the DOM would be lost.
+  // Each job: { jobId, name, status: running|done|failed|cancelled|cleared, percent|null, frames, dir, count, error, startedAt }
+  const vjobs = [];
+  let picking = false, ffmpegOk = null; // ffmpegOk: null = not checked yet
+  const vjob = (id) => vjobs.find((j) => j.jobId === id);
+  const vname = (p) => String(p).split(/[\\/]/).pop();
+  const refreshVideo = () => { if (page === 'video') render(); };
+
+  // Progress events fire about twice a second. Update the one card in place instead of re-rendering the page.
+  cue.video.onProgress((p) => {
+    const j = p && vjob(p.jobId);
+    if (!j || j.status !== 'running') return; // unknown job, or a late event after cancel/finish
+    j.frames = Number.isFinite(p.frames) ? p.frames : j.frames;
+    j.percent = Number.isFinite(p.percent) ? Math.max(0, Math.min(100, Math.round(p.percent))) : null; // null = ffprobe unavailable, so no total duration
+    vpaint(j);
+  });
+
+  function vsub(j) {
+    const n = (k) => `${k} frame${k === 1 ? '' : 's'}`;
+    if (j.status === 'running') return `${ic('loader-circle', 13, 'spin')} Extracting frames… ${j.percent != null ? j.percent + '% · ' : ''}${n(j.frames)}`;
+    if (j.status === 'done') return `${n(j.count)} at 1 per second`;
+    if (j.status === 'cleared') return 'Frames deleted';
+    if (j.status === 'cancelled') return 'Cancelled';
+    return 'Could not process this video';
+  }
+  function vcard(j) {
+    const run = j.status === 'running', id = esc(j.jobId);
+    const pill = { running: `<span class="pill accent">${ic('loader-circle', 12, 'spin')}Processing</span>`, done: `<span class="pill ok">${ic('circle-check', 12)}Complete</span>`,
+      failed: `<span class="pill" style="color:var(--bad)">${ic('circle-alert', 12)}Failed</span>`, cancelled: '<span class="pill">Cancelled</span>', cleared: '<span class="pill">Frames deleted</span>' }[j.status];
+    return `<div class="dcard vjob ${j.status}" data-job="${id}"><div class="eyebrow">${fmtDate(j.startedAt)}</div><div class="nm">${esc(j.name)}</div><div class="sub" data-sub>${vsub(j)}</div>
+      ${run ? `<div class="bar"><i data-bar class="${j.percent == null ? 'ind' : ''}" ${j.percent == null ? '' : `style="width:${j.percent}%"`}></i></div>` : ''}
+      ${j.status === 'done' ? `<div class="vdir">${ic('folder-open', 15)}<span class="grow">${esc(j.dir)}</span><button class="ib" data-act="copy" data-job="${id}" title="Copy folder path">${ic('copy', 14)}</button></div>` : ''}
+      ${j.status === 'failed' ? `<div class="err">${esc(j.error)}</div>` : ''}
+      <div class="tags">${pill}</div>
+      <div class="meta"><div class="grow"></div>${run ? `<button class="btn ghost sm" data-act="cancel" data-job="${id}">${ic('square', 13)}Cancel</button>` : `<button class="btn ghost sm" data-act="dismiss" data-job="${id}" title="Remove from this list (frames stay on disk)">Dismiss</button>`}</div></div>`;
+  }
+  function vpaint(j) {
+    const card = $$('.vjob').find((c) => c.dataset.job === j.jobId); if (!card) return; // not on this page right now; state is already updated
+    $('[data-sub]', card).innerHTML = vsub(j);
+    const bar = $('[data-bar]', card);
+    if (bar && j.percent != null) { bar.classList.remove('ind'); bar.style.width = j.percent + '%'; }
+  }
+  function vpaintFF() {
+    const note = $('#vnote'), go = $('#vgo'); if (!note) return;
+    note.innerHTML = ffmpegOk === false ? `<div class="note warn">${ic('circle-alert', 16)}<div><b>ffmpeg isn't installed.</b> Install it (macOS: <code>brew install ffmpeg</code>) and reopen this page. To use a specific build, set the <code>CUE_FFMPEG</code> environment variable to its full path.</div></div>` : '';
+    if (go) go.disabled = ffmpegOk === false;
+  }
+
+  async function vAnalyze() {
+    if (picking) return; picking = true; // guards the dialog only, so several videos can run at once (the backend allows 2)
+    let p; try { p = await cue.video.pick(); } catch (e) { p = { ok: false, error: e.message }; } finally { picking = false; }
+    if (!p.ok) return toast(p.error, 5000);
+    if (p.path) vRun(p.path); // p.path is null when the dialog was dismissed
+  }
+  async function vRun(filePath) {
+    const { jobId, done } = cue.video.extract(filePath); // jobId comes back immediately so the card can offer Cancel
+    const job = { jobId, name: vname(filePath), status: 'running', percent: null, frames: 0, startedAt: Date.now() };
+    vjobs.unshift(job); refreshVideo();
+    let r; try { r = await done; } catch (e) { r = { ok: false, error: e.message }; }
+    if (r && r.ok) { Object.assign(job, { status: 'done', dir: r.dir, count: r.count, percent: 100 }); toast(`Done — ${r.count} frames saved`, 4000); }
+    else if (r && r.cancelled) job.status = 'cancelled';
+    else { Object.assign(job, { status: 'failed', error: (r && r.error) || 'Unknown error' }); toast('Video processing failed: ' + job.error, 6000); }
+    refreshVideo();
+  }
+
+  function pVideo() {
+    frame('Session Video', 'Turn a local recording into one image per second, ready for analysis.',
+      `<div id="vnote"></div><div class="row" style="margin-bottom:14px"><span class="mute grow" style="font-size:12.5px">Frames are saved on this computer until you clear them.</span><button class="btn ghost sm" id="vclear">${ic('trash-2', 14)}Clear extracted frames</button></div>` +
+      (vjobs.length ? `<div class="grid ${st.layout}">${vjobs.map(vcard).join('')}</div>` : `<div class="empty">${ic('layers', 28)}<b style="color:var(--text)">No recordings processed yet</b>Choose “Analyze Session Video” to pick a video file.</div>`),
+      `<button class="btn primary" id="vgo">${ic('upload', 16)}Analyze Session Video</button>`);
+    vpaintFF(); // instant, from the last known answer…
+    cue.video.check().then((r) => { ffmpegOk = !!(r && r.ok && r.ffmpeg); vpaintFF(); }).catch(() => {}); // …then refreshed
+    $('#vgo').onclick = vAnalyze;
+    $('#vclear').onclick = async () => {
+      if (!confirm('Delete all extracted frames? Running jobs will be cancelled.')) return;
+      const r = await cue.video.clearCache();
+      if (!r.ok) return toast('Could not clear frames: ' + r.error, 5000);
+      vjobs.forEach((j) => { if (j.status === 'done') j.status = 'cleared'; });
+      toast('Extracted frames deleted'); refreshVideo();
+    };
+    $('#bd').onclick = async (e) => {
+      const t = e.target.closest('button[data-act]'); if (!t) return;
+      const j = vjob(t.dataset.job); if (!j) return;
+      if (t.dataset.act === 'cancel') { t.disabled = true; await cue.video.cancel(j.jobId); } // vRun() sees the cancelled result and updates the card
+      if (t.dataset.act === 'copy' && j.dir) { try { await navigator.clipboard.writeText(j.dir); toast('Folder path copied'); } catch { toast('Could not copy the path', 4000); } }
+      if (t.dataset.act === 'dismiss' && j.status !== 'running') { vjobs.splice(vjobs.indexOf(j), 1); refreshVideo(); }
+    };
+  }
+
   // ---------------- settings modal ----------------
   async function settingsModal() {
     const S = await cue.settings.get();
@@ -148,6 +238,6 @@ if (MODE === 'dashboard') (() => {
     });
   }
 
-  function render() { ({ sessions: pSessions, resumes: () => pFiles('resume'), documents: () => pFiles('document'), questions: pQuestions, mock: pMock, maker: pMaker }[page] || pSessions)(); }
+  function render() { ({ sessions: pSessions, resumes: () => pFiles('resume'), documents: () => pFiles('document'), video: pVideo, questions: pQuestions, mock: pMock, maker: pMaker }[page] || pSessions)(); }
   render();
 })();

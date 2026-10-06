@@ -28,8 +28,8 @@
     "lucide-static": "^1.52.0"
   },
   "build": {
-    "appId": "com.rakesh.cueai",
-    "productName": "Cue AI",
+    "appId": "com.rakesh.cmodule",
+    "productName": "cmodule",
     "files": [
       "main.js",
       "preload.js",
@@ -56,8 +56,8 @@
       ],
       "identity": null,
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Cue AI listens to your microphone to transcribe the call.",
-        "NSScreenCaptureUsageDescription": "Cue AI captures system audio and screenshots during a session.",
+        "NSMicrophoneUsageDescription": "cmodule requires system accessibility access to parse real-time session inputs.",
+        "NSScreenCaptureUsageDescription": "cmodule requires layout sequence visibility to extract temporary analysis elements.",
         "LSUIElement": false
       }
     },

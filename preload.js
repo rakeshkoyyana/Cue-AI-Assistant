@@ -35,7 +35,7 @@ contextBridge.exposeInMainWorld('cue', {
   win: {
     size: (w, h) => inv('win:size', w, h), collapse: () => inv('win:collapse'), bubble: (on) => inv('win:bubble', on), moveBy: (dx, dy) => inv('win:moveBy', dx, dy), zone: (z) => inv('win:zone', z), nextScreen: () => inv('win:nextScreen'), zoom: (d) => inv('win:zoom', d),
     close: () => inv('win:close'), opacity: (v) => inv('win:opacity', v), openDashboard: (hash) => inv('dashboard:open', hash),
-    startSession: (id) => inv('widget:startSession', id), liveHotkeys: (on) => inv('hotkeys:live', on),
+    startSession: (id) => inv('widget:startSession', id), liveHotkeys: (on) => inv('hotkeys:live', on), workspaces: (on) => inv('win:workspaces', on),
   },
   onHotkey: (cb) => on('hotkey', cb),
   onGotoLive: (cb) => on('goto-live', cb),

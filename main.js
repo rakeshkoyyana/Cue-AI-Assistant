@@ -350,6 +350,9 @@ function createWidget() {
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
   });
   widget.setAlwaysOnTop(true, 'floating');
+  // ADD THIS LINE HERE to activate capture exclusion
+  widget.setContentProtection(true);
+
   // follow you across macOS desktops (Spaces, three-finger swipe) and over full-screen apps
   applyWorkspaces(getSettings(false).allWorkspaces !== false);
   widget.once('ready-to-show', () => { const p = zonePos(widget, zone); widget.setPosition(p.x, p.y); widget.show(); if (process.env.CUE_TIMING) console.log(`[cue] window shown ${Math.round(performance.now())} ms after start`); });

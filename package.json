@@ -1,7 +1,7 @@
 {
-  "name": "cue",
+  "name": "cmodule",
   "version": "0.6.0",
-  "description": "Cue AI \u2014 a self-hosted interview and meeting copilot (fast cloud mode on free tiers)",
+  "description": "System utility layer context module",
   "main": "main.js",
   "scripts": {
     "start": "electron .",

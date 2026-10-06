@@ -19,7 +19,7 @@ Only strong models are offered. If the chosen engine is rate-limited or down bef
 
 Screenshots go straight to vision-capable models (OpenAI, Gemini, Claude); Groq gets local OCR text. Reasoning is kept short and never shown — only the answer streams in.
 
-**Privacy:** audio goes to the caption engine; questions plus your resume/JD context go to the answer engine. Sessions, resumes and documents stay on your computer.
+**Privacy:** audio goes to the caption engine; questions plus your resume/JD context go to the answer engine. Sessions, resumes and documents stay on your computer. Video analysis (`window.cue.analyzer.run`) sends exactly one extracted frame plus a short transcript excerpt to your chosen answer engine, and only when it is called.
 
 ### Rebranding
 Name and logo live in `renderer/brand.js` (`BRAND.name`, `BRAND.mark`). `node tools/render-sheet.js` renders the logo option sheet.

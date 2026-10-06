@@ -20,12 +20,12 @@ async function apiError(res, what, provider = 'groq') {
 const groqError = (res, what) => apiError(res, what, 'groq');
 
 // Streams an OpenAI-compatible chat completion (OpenAI, Gemini, Groq). Returns { ttft, tps, promptTokens, model }.
-async function chatStream({ provider, key, model, system, messages, image, signal, onText, maxTokens = 1024 }) {
+async function chatStream({ provider, key, model, system, messages, image, imageType = 'image/png', signal, onText, maxTokens = 1024 }) {
   const t0 = Date.now(); let tFirst = 0, usage = null, chars = 0, inThink = false;
   // drop any <think>…</think> reasoning a model streams inline — only the answer is shown
   const emit = (t) => { let out = ''; while (t) { if (inThink) { const i = t.indexOf('</think>'); if (i < 0) t = ''; else { inThink = false; t = t.slice(i + 8); } } else { const i = t.indexOf('<think>'); if (i < 0) { out += t; t = ''; } else { out += t.slice(0, i); inThink = true; t = t.slice(i + 7); } } } if (out) { if (!tFirst) tFirst = Date.now(); chars += out.length; onText(out); } };
   const msgs = [{ role: 'system', content: system }, ...messages.map((x, i) => (image && i === messages.length - 1 && x.role === 'user'
-    ? { role: 'user', content: [{ type: 'text', text: x.content }, { type: 'image_url', image_url: { url: 'data:image/png;base64,' + image } }] } : x))];
+    ? { role: 'user', content: [{ type: 'text', text: x.content }, { type: 'image_url', image_url: { url: `data:${imageType};base64,` + image } }] } : x))];
   const body = { model, stream: true, messages: msgs, stream_options: { include_usage: true } };
   if (provider === 'openai') { body.max_completion_tokens = maxTokens; body.reasoning_effort = 'low'; }
   else { body.max_tokens = maxTokens; body.temperature = 0.4; if (provider === 'gemini' || /gpt-oss/.test(model)) body.reasoning_effort = 'low'; }

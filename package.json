@@ -9,6 +9,7 @@
     "icons": "node tools/build-icons.js",
     "test:smoke": "xvfb-run -a electron --no-sandbox tools/smoke.js",
     "test:video": "node tools/video-test.js",
+    "test:analyzer": "node tools/analyzer-test.js",
     "mac": "electron-builder --mac dir",
     "install-mac": "bash tools/install-mac.sh",
     "icon": "xvfb-run -a electron --no-sandbox tools/render-icon.js || electron tools/render-icon.js"
@@ -33,6 +34,7 @@
       "preload.js",
       "cloud.js",
       "video.js",
+      "analyzer.js",
       "renderer/**/*",
       "package.json"
     ],

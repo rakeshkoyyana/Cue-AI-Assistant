@@ -182,4 +182,4 @@ function shutdown() {
   }
 }
 
-module.exports = { register, shutdown };
+module.exports = { register, shutdown, cacheRoot }; // cacheRoot(app): the one folder other modules (analyzer.js) may read frames from

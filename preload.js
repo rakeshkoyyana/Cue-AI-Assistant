@@ -25,6 +25,10 @@ contextBridge.exposeInMainWorld('cue', {
     cancel: (jobId) => inv('video:cancel', jobId), clearCache: () => inv('video:clearCache'),
     onProgress: (cb) => on('video:progress', cb),
   },
+  analyzer: { // names a finished video job by id; transcripts are [{ timestamp (seconds from video start), text, speaker? }]
+    timeline: (jobId, transcripts) => inv('analyzer:timeline', { jobId, transcripts }),
+    run: (opts) => inv('analyzer:run', opts), // { jobId, transcripts, atSeconds, windowSeconds?, question?, model? }
+  },
   deepgramKey: () => inv('deepgram:key'),
   setup: { status: () => inv('setup:status'), test: (which) => inv('setup:test', which), open: (u) => inv('app:openExternal', u) },
   stt: { transcribe: (samples, lang) => inv('stt:transcribe', samples, lang) },

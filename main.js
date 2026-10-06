@@ -5,6 +5,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const os = require('os');
 const video = require('./video');
+const analyzer = require('./analyzer');
 
 // One data folder for both `npm start` and the packaged "Cue AI.app" (copies the old dev folder once).
 if (!process.env.CUE_TEST) {
@@ -124,12 +125,12 @@ function resolveModel(model) {
   }
   return { provider: p, name: name || DEFAULT_OF[p] };
 }
-async function runEngine(m, st, { system, messages, image, signal, mark }) {
+async function runEngine(m, st, { system, messages, image, imageType = 'image/png', signal, mark }) {
   if (m.provider === 'anthropic') {
     const Anthropic = require('@anthropic-ai/sdk');
     const client = new Anthropic({ apiKey: st.anthropicKey });
     const msgs = messages.map((x, i) => image && i === messages.length - 1 && x.role === 'user'
-      ? { role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: image } }, { type: 'text', text: x.content }] } : x);
+      ? { role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: imageType, data: image } }, { type: 'text', text: x.content }] } : x);
     const t1 = Date.now(); let tf = 0;
     const stream = client.messages.stream({ model: m.name, max_tokens: 2048, system, messages: msgs }, { signal });
     stream.on('text', (t) => { if (!tf) tf = Date.now(); mark(t); });
@@ -141,10 +142,10 @@ async function runEngine(m, st, { system, messages, image, signal, mark }) {
     const text = await ai.ocr(image, path.join(app.getPath('userData'), 'ocr')).catch((e) => { throw new Error('Screenshot text recognition failed (' + e.message + ').'); });
     msgs = messages.map((x, i) => (i === messages.length - 1 ? { ...x, content: x.content + `\n\n# Text read from my screen (OCR, may contain errors)\n${text || '(nothing readable)'}` } : x)); img = null;
   }
-  return ai.chatStream({ provider: m.provider, key: st[KEY_OF[m.provider]], model: m.name, system, messages: msgs, image: img, signal, onText: mark });
+  return ai.chatStream({ provider: m.provider, key: st[KEY_OF[m.provider]], model: m.name, system, messages: msgs, image: img, imageType, signal, onText: mark });
 }
 // Tries the chosen engine; if it is rate-limited or down before any text arrives, moves to the next engine that has a key.
-async function streamLLM({ system, messages, image, reqId, onText, onStats, model }) {
+async function streamLLM({ system, messages, image, imageType, reqId, onText, onStats, model }) {
   const tStart = Date.now(); let tFirst = 0; const mark = (t) => { if (!tFirst && t) tFirst = Date.now(); onText(t); };
   const st = getSettings(false); const first = resolveModel(model);
   const cands = [first, ...ORDER.filter((p) => p !== first.provider && st[KEY_OF[p]]).map((p) => ({ provider: p, name: DEFAULT_OF[p] }))];
@@ -152,7 +153,7 @@ async function streamLLM({ system, messages, image, reqId, onText, onStats, mode
   try {
     for (let i = 0; i < cands.length; i++) {
       try {
-        const stats = await runEngine(cands[i], st, { system, messages, image, signal: ctrl.signal, mark });
+        const stats = await runEngine(cands[i], st, { system, messages, image, imageType, signal: ctrl.signal, mark });
         onStats && onStats({ ...stats, model: `${cands[i].provider}:${stats.model || cands[i].name}`, ttft: tFirst ? tFirst - tStart : stats.ttft });
         return;
       } catch (e) {
@@ -164,6 +165,15 @@ async function streamLLM({ system, messages, image, reqId, onText, onStats, mode
 }
 async function complete(system, user, model) {
   let out = ''; await streamLLM({ system, messages: [{ role: 'user', content: user }], reqId: id(), onText: (t) => (out += t), model }); return out;
+}
+// One-shot, non-streaming vision request for analyzer.js -> { text, stats }. Same engine choice and fallback as the widget; stops after 2 minutes.
+async function askVision({ system, messages, image, imageType, model }) {
+  let text = '', stats = null; const reqId = id();
+  const timer = setTimeout(() => aborts.get(reqId)?.abort(), 120000);
+  try { await streamLLM({ system, messages, image, imageType, reqId, model, onText: (t) => (text += t), onStats: (s) => (stats = s) }); }
+  catch (e) { throw e.name === 'AbortError' ? new Error('The model took too long to answer (2 min) and was stopped') : e; }
+  finally { clearTimeout(timer); }
+  return { text, stats };
 }
 const send = (w, ch, d) => { if (w && !w.isDestroyed()) w.webContents.send(ch, d); };
 
@@ -296,6 +306,7 @@ function registerIpc() {
   ipcMain.handle('hotkeys:live', (_e, on) => setLiveHotkeys(on));
 
   video.register({ ipcMain, app, dialog, BrowserWindow }); // video:check / pick / extract / cancel / clearCache
+  analyzer.register({ ipcMain, ask: askVision, cacheRoot: () => video.cacheRoot(app) }); // analyzer:timeline / run (reads frames only from the video cache)
 }
 
 // ---------- 6-zone positioning (3 columns × 2 rows of the current screen) ----------

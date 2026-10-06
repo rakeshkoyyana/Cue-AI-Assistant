@@ -21,7 +21,7 @@ const SECRET_KEYS = ['openaiKey', 'geminiKey', 'anthropicKey', 'groqKey', 'deepg
 const defaults = {
   settings: {
     // Cloud engines. Answers: OpenAI / Google Gemini / Anthropic / Groq (free). Live captions: Deepgram (falls back to Groq Whisper).
-    v: 5, defaultModel: '', openaiKey: '', geminiKey: '', anthropicKey: '', groqKey: '', deepgramKey: '', language: 'en', theme: 'dark', zoom: 1,
+    v: 5, defaultModel: '', openaiKey: '', geminiKey: '', anthropicKey: '', groqKey: '', deepgramKey: '', language: 'en', theme: 'dark', zoom: 1, allWorkspaces: true,
   },
   sessions: [],
   documents: [],
@@ -76,6 +76,10 @@ function readFolder(root) {
   return { files, total };
 }
 
+function applyWorkspaces(on) {
+  if (!widget || widget.isDestroyed() || process.platform === 'win32') return;
+  widget.setVisibleOnAllWorkspaces(!!on, process.platform === 'darwin' ? { visibleOnFullScreen: !!on } : undefined);
+}
 // ---------- prompts ----------
 // compact=true keeps the prompt to ~3–4k tokens so it fits Groq's free-tier per-minute token limits and starts answering instantly.
 function buildSystem(s, db, compact = false) {
@@ -83,10 +87,10 @@ function buildSystem(s, db, compact = false) {
   const cap = (t, n) => (t.length > n ? t.slice(0, n) + '\n…[trimmed]' : t); // standard budget keeps answers fast and cheap on every engine
   const resume = db.documents.find((d) => d.id === s.resumeId);
   const docs = db.documents.filter((d) => (s.docIds || []).includes(d.id));
-  const p = { style: 'concise', format: 'speakable', code: true, ...(s.prefs || {}) };
-  const style = { concise: 'Keep answers short: 2-5 sentences the user can say out loud immediately.', detailed: 'Give thorough answers with reasoning, examples and trade-offs.', star: 'For behavioral questions use STAR (Situation, Task, Action, Result) built from the user\'s real experience.' }[p.style];
-  const format = { speakable: 'Write in natural spoken first person, no markdown headings.', bullets: 'Use tight bullet points.', paragraph: 'Use one or two flowing paragraphs.' }[p.format];
-  const code = p.code ? 'For coding questions give the approach, then clean code, then complexity.' : 'Do not include code blocks unless explicitly asked.';
+  const rules = require('./renderer/catalog').promptRules(s.prefs); // same option ids the wizard and its live preview use (legacy prefs are migrated)
+  const style = [rules.length, rules.tone, rules.star].filter(Boolean).join(' ');
+  const format = rules.format;
+  const code = rules.code;
   let sys = s.type === 'regular'
     ? `You are Cue, a private real-time call copilot. You see a live transcript of a work call and help the user respond accurately and relevantly. When a project folder is provided, ground answers in the actual files and cite paths. If something is not in the provided context, say so instead of guessing. ${style} ${format} ${code}`
     : `You are Cue, a private real-time interview copilot. You see a live transcript of an interview. Write answers in the candidate's first-person voice, grounded in their real resume and the job description. Never invent employers, titles or metrics that are not in the resume; if the resume lacks something, give a truthful bridging answer. ${style} ${format} ${code}`;
@@ -205,7 +209,7 @@ function registerIpc() {
   ipcMain.handle('sessions:create', (_e, data) => {
     const db = load(); const st = db.settings;
     const s = { id: id(), type: 'interview', title: '', company: '', role: '', description: '', jobDescription: '', notes: '', resumeId: null, docIds: [], folderPath: '',
-      language: st.language || 'en', model: '', prefs: { style: 'concise', format: 'speakable', code: true }, autoGenerate: false, saveTranscript: true,
+      language: st.language || 'en', model: '', prefs: require('./renderer/catalog').normalizePrefs(), autoGenerate: false, saveTranscript: true,
       status: 'ready', usageMs: 0, transcript: [], messages: [], summary: '', createdAt: Date.now(), ...data };
     db.sessions.push(s); save(db); return s;
   });
@@ -301,6 +305,8 @@ function registerIpc() {
   ipcMain.handle('win:zoom', (e, d) => { const wc = e.sender; let z = wc.getZoomFactor(); z = d === 0 ? 1 : Math.min(2, Math.max(0.6, z + d)); wc.setZoomFactor(z); const db = load(); db.settings.zoom = z; save(db); return z; });
   ipcMain.handle('win:close', (e) => { const win = winOf(e); if (win === widget) app.quit(); else win.close(); });
   ipcMain.handle('win:opacity', (e, v) => { winOf(e).setOpacity(Math.min(1, Math.max(0.3, v))); });
+  // "Infinity" on the rail: show the widget on every desktop/workspace (macOS Spaces, Linux workspaces; Windows has no per-desktop API).
+  ipcMain.handle('win:workspaces', (_e, on) => { const v = !!on; const db = load(); db.settings.allWorkspaces = v; save(db); applyWorkspaces(v); return v; });
   ipcMain.handle('dashboard:open', (_e, hash) => openDashboard(hash));
   ipcMain.handle('widget:startSession', (_e, sid) => { widget.show(); widget.focus(); send(widget, 'goto-live', sid); });
   ipcMain.handle('hotkeys:live', (_e, on) => setLiveHotkeys(on));
@@ -345,7 +351,7 @@ function createWidget() {
   });
   widget.setAlwaysOnTop(true, 'floating');
   // follow you across macOS desktops (Spaces, three-finger swipe) and over full-screen apps
-  if (process.platform === 'darwin') widget.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  applyWorkspaces(getSettings(false).allWorkspaces !== false);
   widget.once('ready-to-show', () => { const p = zonePos(widget, zone); widget.setPosition(p.x, p.y); widget.show(); if (process.env.CUE_TIMING) console.log(`[cue] window shown ${Math.round(performance.now())} ms after start`); });
   widget.on('show', () => setMoveKeys(true)); widget.on('hide', () => setMoveKeys(false));
   widget.loadFile(path.join(__dirname, 'renderer', 'index.html'), { query: { mode: 'widget' } });

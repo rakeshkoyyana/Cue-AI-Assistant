@@ -10,6 +10,7 @@
     "test:smoke": "xvfb-run -a electron --no-sandbox tools/smoke.js",
     "test:video": "node tools/video-test.js",
     "test:analyzer": "node tools/analyzer-test.js",
+    "test:catalog": "node tools/catalog-test.js",
     "mac": "electron-builder --mac dir",
     "install-mac": "bash tools/install-mac.sh",
     "icon": "xvfb-run -a electron --no-sandbox tools/render-icon.js || electron tools/render-icon.js"

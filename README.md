@@ -56,3 +56,27 @@ Ctrl/⌘+Enter Answer · Ctrl/⌘+Shift+Enter Screenshot · Ctrl/⌘+Shift+Space
 - Not included on purpose: hiding the window from screen-share capture.
 - Not included: Headshots, referrals/subscription, cloud accounts.
 - Build installers: `npm run dist`.
+
+## Current setup (what to use today)
+
+| Job | Engine | Key from | Cost |
+|---|---|---|---|
+| Answers (default) | Google Gemini 3.8 Flash (free API tier) | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | Free |
+| Answers backup | Groq GPT-OSS 120B — used automatically if Gemini is rate-limited | [console.groq.com/keys](https://console.groq.com/keys) | Free |
+| Live captions | Deepgram Nova-3, word-by-word | [console.deepgram.com](https://console.deepgram.com/signup) | $200 sign-up credit |
+
+Known trade-offs of the free setup: Gemini's free-tier limits are unpublished (shown per project in AI Studio), and free-tier prompts may be used by Google to improve its products.
+
+## Future scope
+
+**Engines / free credits** (Cue needs a new engine type for each before these work):
+- **Google Cloud Vertex AI** — top priority. New Google Cloud accounts get a $300 / 90-day trial that covers Gemini on Vertex AI (not the AI Studio API since March 2026). Same Gemini models, higher limits, prompts not used for training.
+- **AWS Bedrock** — Claude models paid by AWS new-account credits (needs a card on file).
+- **Azure OpenAI** — GPT models via Azure for Students (~$100, .edu email). Check first: student subscriptions have historically been blocked from Azure OpenAI.
+- **Anthropic direct** — $5 sign-up credit (already supported as a paid engine).
+- **Paid tiers** when needed: Gemini paid tier, OpenAI GPT-5.6 Luna, Claude Haiku/Sonnet (already supported; roughly $0.20–$0.60 per interview hour).
+
+**Product:**
+- Fully offline mode (local models) — parked: too slow on a 16 GB fanless laptop (30–45 s per answer in testing).
+- Mac audio setup guide (BlackHole) built into the Connect screen.
+- Behaviours to match Parakeet more closely once observed: Auto Generate trigger rules, screenshot flow, Answer Preferences options, meeting detection, session inactivity end.

@@ -1,20 +1,19 @@
 if (MODE === 'dashboard') (() => {
   let page = new URLSearchParams(location.search).get('page') || 'sessions';
-  const st = { tab: 'all', type: 'all', q: '', sort: 'new', layout: 'grid', banner: true, sid: null, view: 'session' };
-  let waveCtl = null; // the open recording card (so its audio and animation loop are released when the page re-renders)
-  cue.onDashNav((p) => { if (p === 'settings') return settingsModal(); page = p; render(); });
+  const st = { tab: 'all', q: '', sort: 'new', layout: 'grid', banner: true };
+  cue.onDashNav((p) => { page = p; render(); });
   cue.settings.get().then((s) => applyTheme(s.theme || 'dark'));
 
   const NAV = [['sessions', 'audio-lines', 'Call Sessions'], ['resumes', 'file-user', 'Resumes'], ['documents', 'folders', 'Documents'], ['video', 'layers', 'Session Video']];
-  const PREP = [['questions', 'book-open', 'Question Bank'], ['mock', 'mic', 'Audio Rehearsal'], ['maker', 'wand-sparkles', 'Resume Maker']];
-  const link = ([id, icon, label]) => `<a data-p="${id}" class="${page === id || (page === 'session' && id === 'sessions') ? 'on' : ''}">${ic(icon, 16)}${label}</a>`;
+  const PREP = [['questions', 'book-open', 'Question Bank'], ['mock', 'mic', 'Mock Interview'], ['maker', 'wand-sparkles', 'Resume Maker']];
+  const link = ([id, icon, label]) => `<a data-p="${id}" class="${page === id ? 'on' : ''}">${ic(icon, 16)}${label}</a>`;
 
   function frame(title, sub, body, action = '') {
     app.innerHTML = `<div class="dash view"><aside class="sb"><div class="brand">${brandHTML()}</div><button class="btn primary" id="newSess">${ic('plus', 16)}Create Session</button>
       <div class="grp">Call Assistant</div><div class="nav">${NAV.map(link).join('')}</div><div class="grp">Prepare</div><div class="nav">${PREP.map(link).join('')}</div>
       <div class="foot"><b>${ic('zap', 15)}Cloud engines</b>Answers via OpenAI, Gemini, Claude or Groq; live captions via Deepgram. Sessions, resumes and documents stay on this computer.<div class="gap"></div><button class="btn ghost sm" id="gear">${ic('settings', 14)}Setup &amp; Settings</button></div></aside>
       <section class="mainc"><div class="pagehd"><div class="grow"><h1>${title}</h1><p>${sub}</p></div>${action}</div><div class="pagebd" id="bd">${body}</div></section></div>`;
-    $$('.nav a').forEach((a) => (a.onclick = () => { page = a.dataset.p; st.tab = 'all'; st.type = 'all'; st.q = ''; render(); }));
+    $$('.nav a').forEach((a) => (a.onclick = () => { page = a.dataset.p; st.tab = 'all'; st.q = ''; render(); }));
     $('#newSess').onclick = () => cue.win.startSession('__new');
     $('#gear').onclick = settingsModal;
   }
@@ -36,29 +35,34 @@ if (MODE === 'dashboard') (() => {
   // ---------------- Call Sessions ----------------
   async function pSessions() {
     const all = await cue.sessions.list();
-    const rows = filterSort(all.filter((s) => st.type === 'all' || s.type === st.type), (s) => [s.company, s.role, s.title, s.description].join(' '), (s) => s.createdAt);
-    const active = st.tab === 'past' ? [] : rows.filter((s) => s.status !== 'ended'), past = st.tab === 'active' ? [] : rows.filter((s) => s.status === 'ended');
+    const rows = filterSort(all.filter((s) => st.tab === 'all' || s.type === st.tab), (s) => [s.company, s.role, s.title, s.description].join(' '), (s) => s.createdAt);
+    const active = rows.filter((s) => s.status !== 'ended'), past = rows.filter((s) => s.status === 'ended');
     const kind = (s) => (s.type === 'regular' ? `${ic('phone', 12)}Regular` : s.type === 'mock' ? `${ic('mic', 12)}Mock` : `${ic('briefcase-business', 12)}Interview`);
     const card = (s) => {
       const regular = s.type === 'regular', ended = s.status === 'ended';
       return `<div class="dcard"><div class="eyebrow">${fmtDate(s.createdAt)}</div><div class="nm">${esc(clean(regular ? s.title || 'Call' : s.company || s.title))}</div><div class="sub">${esc(clean(regular ? s.description : s.role)) || '&nbsp;'}</div>
         <button class="dots" data-del="${s.id}" title="Delete session">${ic('trash-2', 15)}</button><div class="tags"><span class="pill">${kind(s)}</span>${s.saveTranscript ? `<span class="pill">${ic('file-text', 12)}Transcript</span>` : ''}</div>
         <div class="meta"><div class="grow"><div class="stat"><i class="${ended ? 'end' : ''}"></i>${ended ? 'Ended' : 'Ready to start'}</div><div class="mute" style="font-size:12px">${s.usageMs ? fmtDur(s.usageMs) : 'No usage yet'}</div></div>
-        <button class="btn ghost sm" data-open="${s.id}">${ended ? 'View Session' : 'Details'}</button><button class="btn sm ${ended ? '' : 'primary'}" data-start="${s.id}">${ic('play', 13)}${ended ? 'Restart' : 'Start Session'}</button></div></div>`;
+        ${ended ? `<button class="btn ghost sm" data-tr="${s.id}">View Transcript</button>` : ''}<button class="btn sm ${ended ? '' : 'primary'}" data-start="${s.id}">${ic('play', 13)}${ended ? 'Restart' : 'Start Session'}</button></div></div>`;
     };
     const group = (name, arr) => `<div class="gh">${ic('chevron-down', 15)}${name} <span>${arr.length}</span></div><div class="grid ${st.layout}">${arr.map(card).join('') || `<div class="empty">${ic('sparkles', 28)}Nothing here yet.</div>`}</div>`;
     frame('Call Sessions', 'Prepare for calls and review past sessions.',
       (st.banner ? `<div class="banner"><button class="ib" id="xban" style="position:absolute;right:14px;top:14px" title="Dismiss">${ic('x', 16)}</button><div class="eyebrow">Mock interview</div><h2>Rehearse the interview before the real one.</h2><p>An AI interviewer asks the questions out loud while ${BRAND.name} drafts your answers beside you — exactly as it will on the day.</p><button class="btn primary" id="mockGo">${ic('mic', 15)}Start a mock interview</button></div>` : '') +
-      tabs([['all', 'All'], ['active', 'Active'], ['past', 'Past']]) + toolbar('Search by role or company', `<select id="typeSel" aria-label="Session type" style="width:auto;height:38px;margin-right:8px">${[['all', 'All types'], ['interview', 'Interview'], ['regular', 'Regular'], ['mock', 'Mock']].map(([v, l]) => `<option value="${v}" ${st.type === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`) + (st.tab !== 'past' ? group('Active', active) : '') + (st.tab !== 'active' ? group('Past', past) : ''),
+      tabs([['all', 'All'], ['interview', 'Interview'], ['regular', 'Regular'], ['mock', 'Mock']]) + toolbar('Search by role or company') + group('Active', active) + group('Past', past),
       `<button class="btn primary" id="topNew">${ic('plus', 16)}Create Session</button>`);
-    bindTabs(); bindToolbar(); $('#typeSel').onchange = (e) => { st.type = e.target.value; render(); }; $('#topNew').onclick = () => cue.win.startSession('__new');
+    bindTabs(); bindToolbar(); $('#topNew').onclick = () => cue.win.startSession('__new');
     if ($('#xban')) $('#xban').onclick = () => { st.banner = false; render(); };
     if ($('#mockGo')) $('#mockGo').onclick = () => { page = 'mock'; render(); };
     $('#bd').onclick = async (e) => {
       const t = e.target.closest('button'); if (!t) return;
       if (t.dataset.start) cue.win.startSession(t.dataset.start);
       if (t.dataset.del && confirm('Delete this session?')) { await cue.sessions.remove(t.dataset.del); render(); }
-      if (t.dataset.open) { st.sid = t.dataset.open; st.view = 'session'; page = 'session'; render(); }
+      if (t.dataset.tr) {
+        const s = await cue.sessions.get(t.dataset.tr);
+        const tx = (s.transcript || []).map((l) => `${l.speaker}: ${l.text}`).join('\n') || '(no transcript saved)';
+        const qa = (s.messages || []).map((m) => (m.role === 'user' ? '\nQ: ' : 'A: ') + m.content).join('\n');
+        textModal(clean(s.company || s.title) + ' — transcript', `${tx}\n\n──── Answers ────${qa || '\n(none)'}${s.summary ? '\n\n──── Summary ────\n' + s.summary : ''}`);
+      }
     };
   }
 
@@ -103,7 +107,7 @@ if (MODE === 'dashboard') (() => {
   // ---------------- Prepare: Mock Interview ----------------
   async function pMock() {
     const sess = (await cue.sessions.list()).filter((s) => s.type === 'interview');
-    frame('Audio Rehearsal', 'An AI interviewer asks questions out loud while Cue drafts your answers beside you.',
+    frame('Mock Interview', 'An AI interviewer asks questions out loud while Cue drafts your answers beside you.',
       `<div class="banner"><div class="eyebrow">Practice</div><h2>Rehearse before the real one.</h2><p>Pick an interview session to base the mock on. ${BRAND.name} opens the live widget; press <b>Next question</b> and the AI interviewer asks it out loud. Answer into your microphone, then press Answer to compare with ${BRAND.name}'s draft.</p>
       <div class="row"><select id="sel" style="max-width:420px">${sess.map((s) => `<option value="${s.id}">${esc(clean(s.company || s.title))} — ${esc(clean(s.role))}</option>`).join('') || '<option value="">Create an interview session first</option>'}</select><button class="btn primary" id="go" ${sess.length ? '' : 'disabled'}>${ic('mic', 15)}Start mock interview</button></div></div>`);
     $('#go').onclick = async () => {
@@ -234,48 +238,6 @@ if (MODE === 'dashboard') (() => {
     });
   }
 
-
-  // ---------------- Session detail (recording, metadata, summary, Q&A, transcript, review checklist) ----------------
-  const REVIEW_ROWS = [['intro', 'Opening & introduction'], ['tech', 'Technical answers'], ['beh', 'Behavioral stories (STAR)'], ['comm', 'Clarity & pacing'], ['ask', 'Questions I asked them'], ['close', 'Closing & follow-up']];
-  const REVIEW_COLS = [['good', 'Went well'], ['work', 'Needs work'], ['follow', 'Follow up']];
-  const qaPairs = (msgs) => { const out = []; for (const m of msgs || []) { if (m.role === 'user') out.push({ q: m.content, a: '' }); else if (out.length) out[out.length - 1].a += m.content; } return out; };
-  async function pDetail() {
-    const s = await cue.sessions.get(st.sid); if (!s) { page = 'sessions'; return render(); }
-    const regular = s.type === 'regular', name = clean(regular ? s.title || 'Call' : s.company || s.title || 'Interview');
-    const box = (l, v) => `<div class="mbox"><small>${l}</small><b title="${esc(v || '')}">${esc(v || '—')}</b></div>`;
-    const lines = s.transcript || [], pairs = qaPairs(s.messages), review = s.review || {};
-    const meta = box('Company', clean(s.company)) + box('Role', clean(s.role)) + box('Type', { interview: 'Interview', regular: 'Regular', mock: 'Mock' }[s.type] || s.type) + box('Date', fmtDate(s.createdAt)) + box('Time used', s.usageMs ? fmtDur(s.usageMs) : '') + box('Language', CATALOG.languageName(s.language));
-    const sessionView = `<div class="dsum"><div class="row"><b class="grow">${ic('sparkles', 15)} Summary</b><button class="btn sm" id="gen" ${lines.length ? '' : 'disabled title="No transcript was saved for this session"'}>${s.summary ? 'Regenerate' : 'Generate summary'}</button></div>
-        <div class="sumtext">${s.summary ? md(s.summary) : `<span class="mute">${lines.length ? 'No summary yet — generate one from the saved transcript.' : 'No transcript was saved, so there is nothing to summarize.'}</span>`}</div></div>
-      <h3 class="dh">Questions &amp; answers <span class="cnt">${pairs.length}</span></h3>
-      ${pairs.map((p, i) => `<details class="qa" ${i === 0 ? 'open' : ''}><summary>${esc(clean(p.q).replace(/^Answer this question that was just asked in the conversation:\s*/i, '').slice(0, 160) || 'Question')}</summary><div class="qa-a">${md(p.a || '…')}</div></details>`).join('') || '<div class="empty" style="padding:22px">No answers were generated in this session.</div>'}
-      <h3 class="dh">Review checklist <span class="cnt" id="rvCnt"></span><button class="lnk" id="rvReset" style="margin-left:auto">Reset</button></h3>
-      <table class="chkmx"><thead><tr><th scope="col">Area</th>${REVIEW_COLS.map(([, l]) => `<th scope="col">${l}</th>`).join('')}</tr></thead><tbody>${REVIEW_ROWS.map(([r, l]) => `<tr><th scope="row">${l}</th>${REVIEW_COLS.map(([c, cl]) => `<td><input type="radio" name="rv_${r}" value="${c}" data-r="${r}" aria-label="${esc(l)}: ${cl}" ${review[r] === c ? 'checked' : ''} /></td>`).join('')}</tr>`).join('')}</tbody></table>`;
-    const transcriptView = `<div class="row" style="margin-bottom:10px"><b class="grow">${ic('file-text', 15)} Transcript <span class="cnt">${lines.length} lines</span></b><button class="btn ghost sm" id="cpTx" ${lines.length ? '' : 'disabled'}>${ic('copy', 14)}Copy</button></div>
-      <div class="txlog">${lines.map((l) => `<div class="tline"><b>${esc(l.speaker)}</b><span>${esc(l.text)}</span></div>`).join('') || '<div class="empty" style="padding:22px">No transcript was saved for this session. Turn on Save Transcript when you create it.</div>'}</div>`;
-    frame(esc(name), esc(regular ? clean(s.description) : clean(s.role)) || '&nbsp;',
-      `<div id="recHost"></div><div class="mgridd">${meta}</div>
-      <div class="vtoggle" role="tablist" aria-label="Session view"><button role="tab" data-v="session" aria-selected="${st.view === 'session'}" class="${st.view === 'session' ? 'on' : ''}">View Session</button><button role="tab" data-v="transcript" aria-selected="${st.view === 'transcript'}" class="${st.view === 'transcript' ? 'on' : ''}">View Transcript</button></div>
-      <div id="dview">${st.view === 'transcript' ? transcriptView : sessionView}</div>`,
-      `<button class="btn ghost" id="backList">${ic('arrow-left', 15)}All sessions</button><button class="btn primary" id="startIt" style="margin-left:8px">${ic('play', 14)}${s.status === 'ended' ? 'Restart' : 'Start Session'}</button>`);
-    waveCtl = WAVE.mountWaveCard($('#recHost'), { ic, esc });
-    $('#backList').onclick = () => { page = 'sessions'; render(); }; $('#startIt').onclick = () => cue.win.startSession(s.id);
-    // Switching views swaps only #dview, so a recording loaded in the card above keeps playing.
-    const bindView = () => {
-      if (st.view === 'transcript') { $('#cpTx').onclick = () => { navigator.clipboard.writeText(lines.map((l) => `${l.speaker}: ${l.text}`).join('\n')); toast('Copied', 1200); }; return; }
-      $('#gen').onclick = async () => { const b = $('#gen'); b.disabled = true; b.textContent = 'Summarizing…'; try { await cue.llm.summarize(s.id); render(); } catch (e) { toast(e.message, 5000); b.disabled = false; b.textContent = 'Generate summary'; } };
-      const paintRv = () => { $('#rvCnt').textContent = `${Object.keys(review).length} of ${REVIEW_ROWS.length} reviewed`; };
-      $('.chkmx').onchange = async (e) => { const r = e.target.dataset.r; if (!r) return; review[r] = e.target.value; paintRv(); await cue.sessions.update(s.id, { review: { ...review } }); };
-      $('#rvReset').onclick = async () => { Object.keys(review).forEach((k) => delete review[k]); $$('.chkmx input').forEach((i) => (i.checked = false)); paintRv(); await cue.sessions.update(s.id, { review: {} }); };
-      paintRv();
-    };
-    $$('.vtoggle button').forEach((b) => (b.onclick = () => {
-      st.view = b.dataset.v; $('#dview').innerHTML = st.view === 'transcript' ? transcriptView : sessionView;
-      $$('.vtoggle button').forEach((x) => { const on = x.dataset.v === st.view; x.classList.toggle('on', on); x.setAttribute('aria-selected', String(on)); }); bindView();
-    }));
-    bindView();
-  }
-
-  function render() { if (waveCtl) { waveCtl.destroy(); waveCtl = null; } ({ sessions: pSessions, session: pDetail, resumes: () => pFiles('resume'), documents: () => pFiles('document'), video: pVideo, questions: pQuestions, mock: pMock, maker: pMaker }[page] || pSessions)(); }
+  function render() { ({ sessions: pSessions, resumes: () => pFiles('resume'), documents: () => pFiles('document'), video: pVideo, questions: pQuestions, mock: pMock, maker: pMaker }[page] || pSessions)(); }
   render();
 })();

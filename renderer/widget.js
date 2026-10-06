@@ -21,29 +21,53 @@ if (MODE === 'widget') (() => {
     el.addEventListener('pointerup', () => { if (d && !d.moved) restore(); d = null; });
   })();
 
-  // ---------- create / edit wizard (controller lives in wizard.js) ----------
-  const wizard = createWizard({ view: (h) => view(h), shell: (h) => shell(h), bindHeader: () => bindHeader(), size: (w, h) => cue.win.size(w, h), cancel: () => viewList(), done: (msg) => { toast(msg); viewList(); } });
-  const viewWizard = (session) => wizard.open({ session });
+  // ---------- Resume / document picker (dropdown with Refresh + Upload, opens upward when near the bottom) ----------
+  const docNames = {};
+  const pickerLabel = (kind) => (kind === 'resume' ? docNames[draft.resumeId] || 'Select a resume…' : draft.docIds.length ? `${draft.docIds.length} selected` : 'Select documents');
+  function openPicker(anchor, kind) {
+    $$('.menu').forEach((x) => x.remove());
+    const multi = kind === 'document';
+    const m = document.createElement('div'); m.className = 'menu pick'; document.body.appendChild(m);
+    const off = (e) => { if (!m.contains(e.target) && !anchor.contains(e.target)) close(); };
+    const close = () => { m.remove(); document.removeEventListener('mousedown', off, true); };
+    setTimeout(() => document.addEventListener('mousedown', off, true));
+    const place = () => {
+      const r = anchor.getBoundingClientRect(); m.style.width = Math.max(r.width, 240) + 'px'; m.style.left = Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8)) + 'px';
+      const h = m.offsetHeight; const up = r.bottom + h + 10 > innerHeight; m.style.transformOrigin = up ? 'bottom left' : 'top left'; m.style.top = (up ? Math.max(8, r.top - h - 6) : r.bottom + 6) + 'px';
+    };
+    const draw = async () => {
+      const items = (await cue.docs.list()).filter((d) => d.kind === kind); items.forEach((d) => (docNames[d.id] = d.name));
+      const sel = multi ? draft.docIds : [draft.resumeId];
+      m.innerHTML = `<div class="plist">${items.map((d) => `<div class="it" data-id="${d.id}">${multi ? `<input type="checkbox" ${sel.includes(d.id) ? 'checked' : ''}>` : ''}${ic('file-text', 15)}<span class="grow">${esc(d.name)}</span>${!multi && sel[0] === d.id ? ic('check', 15) : ''}</div>`).join('') || `<div class="it mute">No ${multi ? 'documents' : 'resumes'} yet</div>`}</div><div class="sep"></div>
+        <div class="it" data-a="refresh">${ic('refresh-cw', 15)}Refresh ${multi ? 'documents' : 'resumes'}</div><div class="it" data-a="upload">${ic('upload', 15)}Upload a ${multi ? 'document' : 'resume'}</div>`;
+      place();
+    };
+    m.onclick = async (e) => {
+      const row = e.target.closest('.it'); if (!row) return;
+      if (row.dataset.a === 'refresh') { await draw(); toast('Refreshed', 900); return; }
+      if (row.dataset.a === 'upload') {
+        const r = await cue.docs.importFiles(kind); r.filter((x) => x.error).forEach((x) => toast(x.error, 5000));
+        r.filter((x) => x.id).forEach((x) => { docNames[x.id] = x.name; if (multi) draft.docIds.push(x.id); else draft.resumeId = x.id; });
+        anchor.firstElementChild.textContent = pickerLabel(kind); await draw(); if (!multi && r.some((x) => x.id)) close(); return;
+      }
+      const id = row.dataset.id; if (!id) return;
+      if (multi) { draft.docIds = draft.docIds.includes(id) ? draft.docIds.filter((x) => x !== id) : [...draft.docIds, id]; await draw(); }
+      else { draft.resumeId = draft.resumeId === id ? '' : id; close(); }
+      anchor.firstElementChild.textContent = pickerLabel(kind);
+    };
+    draw();
+  }
   cue.onGotoLive((sid) => (sid === '__new' ? viewWizard() : viewConnect(sid)));
 
-  // ---------------- shell + rail ----------------
-  // The left rail is borderless: Close, Options, Move, Shrink, and Infinity (show on every workspace/desktop).
-  const railHTML = () => `<nav class="rail" aria-label="Window controls">
-    <button class="rb close" id="rClose" title="Close ${BRAND.name}" aria-label="Close">${ic('x', 16)}</button>
-    <button class="rb" id="rOpts" title="Options" aria-label="Options" aria-haspopup="true">${ic('layout-grid', 16)}</button>
-    <button class="rb" id="rMove" title="Move (${MOD} + ⇧ + ✥)" aria-label="Move">${ic('move', 16)}</button>
-    <button class="rb" id="rShrink" title="Shrink to a floating logo" aria-label="Shrink">${ic('minimize-2', 16)}</button>
-    <button class="rb ${S.allWorkspaces === false ? '' : 'on'}" id="rAll" title="Show on all workspaces" aria-label="Show on all workspaces" aria-pressed="${S.allWorkspaces !== false}">${ic('infinity', 16)}</button></nav>`;
-  const shell = (inner, cls = '') => `<div class="shell ${cls}">${railHTML()}<div class="smain"><div class="hdr"><div class="brand">${brandHTML()}</div><span class="tier" title="Cloud engines"><i></i>Cloud</span></div>${inner}</div></div>`;
-  // ctx.live: in the live overlay "Session Logout" ends the session; elsewhere it quits the app.
-  function bindRail(ctx = {}) {
-    $('#rClose').onclick = () => cue.win.close();
-    $('#rOpts').onclick = (e) => optionsGrid(e.currentTarget, ctx);
-    $('#rMove').onclick = (e) => zonePicker(e.currentTarget);
-    $('#rShrink').onclick = hide;
-    $('#rAll').onclick = async () => { const on = await cue.win.workspaces(S.allWorkspaces === false); S.allWorkspaces = on; const b = $('#rAll'); b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); toast(on ? 'Showing on all workspaces' : 'Pinned to this workspace', 1400); };
+  // ---------------- shell + header ----------------
+  const shell = (inner, cls = '') => `<div class="shell ${cls}"><div class="hdr"><div class="brand">${brandHTML()}</div><span class="tier" title="Cloud engines"><i></i>Cloud</span>
+    <button class="ib" id="hCollapse" title="Hide">${ic('minimize-2', 16)}</button><button class="ib" id="hMove" title="Move (${MOD} + ⇧ + ✥)">${ic('move', 16)}</button><button class="ib" id="hMenu" title="Menu">${ic('ellipsis-vertical', 16)}</button><button class="ib close" id="hClose" title="Close">${ic('x', 16)}</button></div>${inner}</div>`;
+  function bindHeader() {
+    $('#hCollapse').onclick = hide;
+    $('#hClose').onclick = () => cue.win.close();
+    $('#hMenu').onclick = (e) => kebab(e.currentTarget);
+    $('#hMove').onclick = (e) => zonePicker(e.currentTarget);
   }
-  const bindHeader = () => bindRail({});
   // Move: pick one of 6 screen positions (also ⌘/Ctrl + ⇧ + arrow keys)
   async function zonePicker(anchor) {
     const cur = await cue.win.zone();
@@ -51,28 +75,24 @@ if (MODE === 'widget') (() => {
       m.onclick = (e) => { const b = e.target.closest('[data-z]'); if (!b) return; cue.win.zone(Number(b.dataset.z)); close(); };
     });
   }
-  // Options: a 3x2 grid of keys. (There is deliberately no screen-capture-hiding toggle; Settings takes that slot.)
-  const THEME_NEXT = { dark: 'light', light: 'system', system: 'dark' };
-  function optionsGrid(anchor, ctx = {}) {
-    const th = S.theme || 'dark', icon = th === 'light' ? 'sun' : th === 'dark' ? 'moon' : 'monitor';
-    const tile = (k, i, t, sub, extra = '') => `<div class="otile" role="button" tabindex="0" data-k="${k}"><span class="oi">${ic(i, 18)}</span><b>${t}</b><small>${sub}</small>${extra}</div>`;
-    const html = `<div class="it mute">Options</div><div class="ogrid">${tile('dash', 'layout-grid', 'Dashboard View', 'Open the dashboard')}${tile('screen', 'monitor', 'Screen Sequence Advance', 'Move to the next screen')}${tile('settings', 'settings', 'Settings', 'Keys &amp; engines')}
-      ${tile('zoom', 'search', 'Zoom Adjuster Stepper', 'Interface size', `<span class="step3"><span class="rnd" data-z="-1" role="button" aria-label="Zoom out">−</span><span class="rnd" data-z="0" role="button" aria-label="Reset zoom">${ic('rotate-ccw', 13)}</span><span class="rnd" data-z="1" role="button" aria-label="Zoom in">${ic('plus', 13)}</span></span>`)}
-      ${tile('theme', icon, 'Theme Presentation Mode', th[0].toUpperCase() + th.slice(1))}${tile('logout', 'log-out', 'Session Logout', ctx.live ? 'End this session' : 'Quit ' + BRAND.name)}</div>`;
-    const release = ctx.grow ? ctx.grow() : null;
-    popMenu(anchor, html, (m, close) => {
-      m.classList.add('wide'); m.style.left = Math.max(8, Math.min(innerWidth - m.offsetWidth - 8, anchor.getBoundingClientRect().left)) + 'px'; if (ctx.live) m.style.top = Math.max(8, anchor.getBoundingClientRect().top) + 'px';
-      if (release) { const t = setInterval(() => { if (!m.isConnected) { clearInterval(t); release(); } }, 250); }
-      const act = async (e) => {
-        const z = e.target.closest('[data-z]'); if (z && z.closest('.ogrid')) { e.stopPropagation(); const d = Number(z.dataset.z); cue.win.zoom(d * 0.1); return; }
-        const k = e.target.closest('[data-k]')?.dataset.k; if (!k) return;
-        if (k === 'theme') { S.theme = THEME_NEXT[S.theme || 'dark']; applyTheme(S.theme); await cue.settings.set({ theme: S.theme }); close(); return optionsGrid(anchor, ctx); }
-        close();
-        if (k === 'dash') cue.win.openDashboard('sessions'); if (k === 'screen') cue.win.nextScreen();
-        if (k === 'settings') ctx.live ? cue.win.openDashboard('settings') : viewSettings();
-        if (k === 'logout') ctx.live && ctx.end ? ctx.end() : cue.win.close();
+  function kebab(anchor) {
+    popMenu(anchor, `<div class="it mute">${BRAND.name} ${BRAND.suffix} · local &amp; private</div><div class="sep"></div>
+      <div class="it" data-a="dash">${ic('layout-grid', 15)}<span class="grow">Dashboard</span>${ic('arrow-up-right', 14)}</div>
+      <div class="it" data-a="screen">${ic('monitor', 15)}<span class="grow">Next Screen</span></div>
+      <div class="it" data-a="settings">${ic('settings', 15)}<span class="grow">Setup &amp; Settings</span></div>
+      <div class="it">${ic('search', 15)}<span class="grow">Zoom</span><span class="rnd" data-a="zin">${ic('plus', 14)}</span><span class="rnd" data-a="zout" style="margin-left:4px">−</span><span class="rnd" data-a="zreset" style="margin-left:4px">${ic('rotate-ccw', 14)}</span></div>
+      <div class="it">${ic('sun', 15)}<span class="grow">Theme</span><span class="rnd ${S.theme === 'light' ? 'on' : ''}" data-a="t-light">${ic('sun', 14)}</span><span class="rnd ${S.theme === 'dark' ? 'on' : ''}" data-a="t-dark" style="margin-left:4px">${ic('moon', 14)}</span><span class="rnd ${S.theme === 'system' ? 'on' : ''}" data-a="t-system" style="margin-left:4px">${ic('monitor', 14)}</span></div>
+      <div class="sep"></div><div class="it" data-a="quit">${ic('power', 15)}<span class="grow">Quit ${BRAND.name}</span></div>`, (m, close) => {
+      m.onclick = async (e) => {
+        const a = e.target.closest('[data-a]')?.dataset.a; if (!a) return;
+        if (a === 'dash') cue.win.openDashboard('sessions');
+        if (a === 'screen') cue.win.nextScreen();
+        if (a === 'settings') viewSettings();
+        if (a === 'zin') cue.win.zoom(0.1); if (a === 'zout') cue.win.zoom(-0.1); if (a === 'zreset') cue.win.zoom(0);
+        if (a.startsWith('t-')) { S.theme = a.slice(2); applyTheme(S.theme); await cue.settings.set({ theme: S.theme }); }
+        if (a === 'quit') cue.win.close();
+        if (!a.startsWith('z') && !a.startsWith('t-')) close(); else { close(); kebab(anchor); }
       };
-      m.onclick = act; m.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); act(e); } };
     });
   }
 
@@ -88,7 +108,7 @@ if (MODE === 'widget') (() => {
       $('#cards').innerHTML = rows.length ? rows.map((s) => {
         const regular = s.type === 'regular'; const ended = s.status === 'ended';
         return `<div class="scard"><div class="date">${fmtDate(s.createdAt)}</div><div class="co">${esc(clean(regular ? s.title || 'Call' : s.company || s.title || 'Interview'))}</div><div class="rl">${esc(clean(regular ? s.description : s.role)) || '&nbsp;'}</div>
-          <button class="dots" data-menu="${s.id}" title="Edit, delete or sort" aria-label="Session options" aria-haspopup="true">${ic('ellipsis-vertical', 15)}</button>
+          <button class="dots" data-del="${s.id}" title="Delete session">${ic('trash-2', 15)}</button>
           <div class="tags"><span class="pill">${kindPill(s)}</span>${s.saveTranscript ? `<span class="pill">${ic('file-text', 12)}Transcript</span>` : ''}</div>
           <div class="foot"><div class="grow"><div class="stat"><i class="${ended ? 'end' : ''}"></i>${ended ? 'Ended' : 'Ready to start'}</div><div class="mute" style="font-size:12px">${s.usageMs ? 'Used ' + fmtDur(s.usageMs) : 'No usage yet'}</div></div>
           ${ended ? `<button class="btn ghost sm" data-tr="${s.id}">View Transcript</button>` : ''}<button class="btn sm ${ended ? '' : 'primary'}" data-start="${s.id}">${ic('play', 13)}${ended ? 'Restart' : 'Start Session'}</button></div></div>`;
@@ -101,36 +121,108 @@ if (MODE === 'widget') (() => {
     $('#sort').onclick = (e) => sortMenu(e.currentTarget, sortMode, (v) => { sortMode = v; draw(); });
     $('#toDash').onclick = () => cue.win.openDashboard('sessions');
     $('#create').onclick = () => viewWizard();
-    const cardMenu = (anchor, id) => popMenu(anchor, `<div class="it" data-a="edit">${ic('pencil', 15)}<span class="grow">Edit</span></div><div class="it" data-a="del">${ic('trash-2', 15)}<span class="grow">Delete</span></div><div class="sep"></div><div class="it mute">Sort by</div>${SORTS.map(([v, l]) => `<div class="it" data-s="${v}"><span class="grow">${l}</span>${v === sortMode ? ic('check', 15) : ''}</div>`).join('')}`, (m, close) => {
-      m.onclick = async (e) => { const it = e.target.closest('.it'); if (!it) return; close();
-        if (it.dataset.s) { sortMode = it.dataset.s; draw(); }
-        if (it.dataset.a === 'edit') viewWizard(list.find((x) => x.id === id) && await cue.sessions.get(id));
-        if (it.dataset.a === 'del' && confirm('Delete this session?')) { await cue.sessions.remove(id); list = list.filter((x) => x.id !== id); draw(); } };
-    });
     $('#cards').onclick = async (e) => {
       const t = e.target.closest('button'); if (!t) return;
       if (t.dataset.start) viewConnect(t.dataset.start);
       if (t.dataset.tr) cue.win.openDashboard('sessions');
-      if (t.dataset.menu) cardMenu(t, t.dataset.menu);
+      if (t.dataset.del && confirm('Delete this session?')) { await cue.sessions.remove(t.dataset.del); list = list.filter((s) => s.id !== t.dataset.del); draw(); }
     };
   }
 
+  // ---------------- create-session wizard ----------------
+  let draft = null;
+  const freshDraft = (type = 'interview') => ({ type, company: '', role: '', jobDescription: '', title: '', description: '', resumeId: '', docIds: [], folderPath: '', language: S.language || 'en', model: '',
+    prefs: { style: 'concise', format: 'speakable', code: true }, notes: '', autoGenerate: false, saveTranscript: true });
+
+  async function viewWizard(step = 1) {
+    S = await cue.settings.get();
+    if (!draft) draft = freshDraft();
+    cue.win.size(580, 720);
+    const docs = await cue.docs.list();
+    const side = `<div class="side"><h2>Create Session</h2><p>Enter the details and pick what you need for this call.</p><div class="step ${step === 1 ? 'on' : ''}"><b>1</b>Details</div><div class="step ${step === 2 ? 'on' : ''}"><b>2</b>Preferences</div></div>`;
+    let main;
+    if (step === 1) {
+      docs.forEach((d) => (docNames[d.id] = d.name));
+      const dd = (id, kind) => `<button class="ddbtn" id="${id}"><span>${esc(pickerLabel(kind))}</span>${ic('chevron-down', 15)}</button>`;
+      main = `<div class="tabs2"><button data-type="interview" class="${draft.type === 'interview' ? 'on' : ''}">${ic('briefcase-business', 15)}Interview</button><button data-type="regular" class="${draft.type === 'regular' ? 'on' : ''}">${ic('phone', 15)}Regular</button></div>` +
+        (draft.type === 'interview' ? `<div class="row" style="margin-top:14px"><div class="grow mute" style="font-size:12.5px">Have a link to the job post? Import the details automatically.</div><button class="btn ghost sm" id="imp">${ic('link', 14)}Paste a job link</button></div><div class="row" id="impRow" style="display:none;margin-top:8px"><input id="impUrl" placeholder="https://…" /><button class="btn sm" id="impGo">Import</button></div>
+          <label class="lbl">Company</label><input id="company" placeholder="Enter company name" value="${esc(draft.company)}" />
+          <label class="lbl">Role <small>(optional)</small></label><input id="role" placeholder="e.g. Data Engineer" value="${esc(draft.role)}" />
+          <label class="lbl">Job description</label><textarea id="jd" placeholder="Paste the job description">${esc(draft.jobDescription)}</textarea>
+          <div class="sechd">Context</div><div class="row" style="align-items:flex-start"><div class="grow"><label class="lbl" style="margin-top:6px">CV / Resume</label>${dd('resumeBtn', 'resume')}</div><div class="grow"><label class="lbl" style="margin-top:6px">Documents</label>${dd('docBtn', 'document')}</div></div>`
+        : `<label class="lbl">Call title <small>(optional)</small></label><input id="title" placeholder="Enter call title" value="${esc(draft.title)}" />
+          <label class="lbl">Description <small>(optional)</small></label><textarea id="desc" placeholder="What is this call about?">${esc(draft.description)}</textarea>
+          <div class="sechd">Context</div><label class="lbl" style="margin-top:6px">Documents</label>${dd('docBtn', 'document')}
+          <label class="lbl">Project folder <small>(${BRAND.name} reads the whole folder as context)</small></label><div class="row"><button class="btn ghost sm" id="pick">${ic('folder-open', 14)}Choose folder…</button><span class="mute grow" id="folderInfo" style="word-break:break-all;font-size:12px">${esc(draft.folderPath)}</span></div>`) +
+        `<div class="wizfoot"><button class="btn ghost" id="cancel">Cancel</button><button class="btn primary" id="next">Next${ic('arrow-right', 15)}</button></div>`;
+    } else {
+      const pi = (n) => `<span class="pi">${ic(n, 16)}</span>`;
+      main = `<div class="sechd" style="margin-top:2px">Session</div>
+        <div class="prow">${pi('globe')}<div class="grow"><div class="t">Language</div><div class="s">Language spoken on the call</div></div><select id="lang">${Object.entries(LANGS).map(([k, v]) => `<option value="${k}" ${draft.language === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+        <div class="prow">${pi('cpu')}<div class="grow"><div class="t">AI model</div><div class="s">Speed and accuracy</div></div><select id="model" style="max-width:220px">${modelOptions(S, draft.model)}</select></div>
+        <div class="prow">${pi('settings')}<div class="grow"><div class="t">Answer preferences</div><div class="s">Style and format</div></div><button class="btn ghost sm" id="cfg">Configure</button></div>
+        <div class="prow">${pi('sparkles')}<div class="grow"><div class="t">AI instructions</div><div class="s">Additional guidance</div></div><button class="btn ghost sm" id="ins">Edit</button></div>
+        <div class="sechd">Extra</div>
+        <div class="prow">${pi('zap')}<div class="grow"><div class="t">Auto Generate <span class="pill accent" style="margin-left:4px">Beta</span></div><div class="s">Answers questions automatically</div></div><div class="toggle ${draft.autoGenerate ? 'on' : ''}" id="auto" role="switch" tabindex="0"></div></div>
+        <div class="prow">${pi('file-text')}<div class="grow"><div class="t">Save transcript</div><div class="s">Stored only on this computer</div></div><div class="toggle ${draft.saveTranscript ? 'on' : ''}" id="save" role="switch" tabindex="0"></div></div>
+        <div class="wizfoot"><button class="btn ghost" id="back">${ic('arrow-left', 15)}Back</button><button class="btn primary" id="create">Create Session</button></div>`;
+    }
+    view(shell(`<div class="body"><div class="wiz">${side}<div class="main">${main}</div></div></div>`)); bindHeader();
+
+    const grab = () => {
+      if (step !== 1) return;
+      if (draft.type === 'interview') { draft.company = $('#company').value; draft.role = $('#role').value; draft.jobDescription = $('#jd').value; }
+      else { draft.title = $('#title').value; draft.description = $('#desc').value; }
+    };
+
+    if (step === 1) {
+      $$('.tabs2 button').forEach((b) => (b.onclick = () => { grab(); draft.type = b.dataset.type; viewWizard(1); }));
+      $('#cancel').onclick = () => { draft = null; viewList(); };
+      $('#docBtn').onclick = (e) => openPicker(e.currentTarget, 'document');
+      if (draft.type === 'interview') {
+        $('#resumeBtn').onclick = (e) => openPicker(e.currentTarget, 'resume');
+        $('#imp').onclick = () => { $('#impRow').style.display = 'flex'; $('#impUrl').focus(); };
+        $('#impGo').onclick = async () => {
+          const url = $('#impUrl').value.trim(); if (!url) return; $('#impGo').disabled = true; $('#impGo').textContent = 'Importing…';
+          try { const j = await cue.job.import(url); grab(); draft.company = clean(j.company); draft.role = clean(j.role); draft.jobDescription = clean(j.jobDescription); viewWizard(1); toast('Imported'); }
+          catch (e) { toast(e.message, 5000); $('#impGo').disabled = false; $('#impGo').textContent = 'Import'; }
+        };
+        const ready = () => ($('#company').value.trim() || $('#jd').value.trim()); const sync = () => ($('#next').disabled = !ready());
+        ['#company', '#jd'].forEach((s) => ($(s).oninput = sync)); sync();
+      } else {
+        $('#pick').onclick = async () => { grab(); const p = await cue.folder.pick(); if (!p) return; draft.folderPath = p; const f = await cue.folder.summary(p); viewWizard(1); toast(`${f.fileCount} files loaded as context`); };
+      }
+      $('#next').onclick = () => { grab(); viewWizard(2); };
+    } else {
+      const tg = (id, key) => { const el = $(id); const go = () => { draft[key] = !draft[key]; el.classList.toggle('on'); }; el.onclick = go; el.onkeydown = (e) => (e.key === ' ' || e.key === 'Enter') && (e.preventDefault(), go()); };
+      $('#lang').onchange = (e) => (draft.language = e.target.value);
+      $('#model').onchange = (e) => (draft.model = e.target.value);
+      tg('#auto', 'autoGenerate'); tg('#save', 'saveTranscript');
+      $('#cfg').onclick = () => modal(`<b style="font-size:16px">Answer preferences</b><label class="lbl">Style</label><select id="ps"><option value="concise">Concise</option><option value="detailed">Detailed</option><option value="star">STAR for behavioral</option></select>
+        <label class="lbl">Format</label><select id="pf"><option value="speakable">Speakable (natural first person)</option><option value="bullets">Bullet points</option><option value="paragraph">Paragraphs</option></select>
+        <label class="lbl" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="pc"> Include code for coding questions</label><div class="row" style="justify-content:flex-end;margin-top:16px"><button class="btn primary" id="ok">Done</button></div>`, (b, close) => {
+        $('#ps', b).value = draft.prefs.style; $('#pf', b).value = draft.prefs.format; $('#pc', b).checked = draft.prefs.code;
+        $('#ok', b).onclick = () => { draft.prefs = { style: $('#ps', b).value, format: $('#pf', b).value, code: $('#pc', b).checked }; close(); };
+      });
+      $('#ins').onclick = () => modal(`<b style="font-size:16px">AI instructions</b><p class="mute" style="margin:4px 0 10px">Tone, things to emphasize, topics to avoid…</p><textarea id="nt">${esc(draft.notes)}</textarea><div class="row" style="justify-content:flex-end;margin-top:16px"><button class="btn primary" id="ok">Save</button></div>`, (b, close) => { $('#ok', b).onclick = () => { draft.notes = $('#nt', b).value; close(); }; });
+      $('#back').onclick = () => viewWizard(1);
+      $('#create').onclick = async () => {
+        const d = draft; await cue.sessions.create({ ...d, title: d.title || (d.type === 'interview' ? d.company : 'Call') });
+        draft = null; toast('Session created'); viewList();
+      };
+    }
+  }
+
   // ---------------- connect ----------------
-  const GUIDE = `<b style="font-size:16px">Setup guide</b><ol class="guide"><li><b>Pick your audio.</b> ${BRAND.name} listens to your microphone, plus your computer's audio when it can, so it hears the other side.</li>
-    <li><b>Windows:</b> allow screen sharing when asked and tick “share system audio”.</li><li><b>macOS:</b> install a loopback device such as BlackHole and select it as the output, then allow Screen Recording for ${BRAND.name} in System Settings.</li>
-    <li><b>Test first.</b> Start a mock session and say a sentence — the caption bar should show your words.</li><li><b>Keys.</b> Add your answer and caption keys under Settings. They stay encrypted on this computer.</li></ol><div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn primary" data-x>Got it</button></div>`;
   async function viewConnect(sid) {
-    cue.win.size(560, 700);
+    cue.win.size(540, 640);
     const s = await cue.sessions.get(sid); if (!s) return viewList();
-    const name = esc(clean(s.type === 'regular' ? s.title || 'Call' : s.company || s.title || 'Interview'));
-    view(shell(`<div class="body"><div class="connect"><h2>Connect Call Session</h2>
-      <div class="sumcard">${ic('infinity', 20)}<div><b>This is an unlimited session</b><p>${name} runs until you end it. Time on the call is tracked only on this computer, and your transcript is saved there only if you chose Save Transcript.</p></div></div>
-      <a href="#" class="tutlink" id="tut" role="button">${ic('circle-play', 18)}<span class="grow"><b>Video Tutorial</b><small>See how to set up audio for a call</small></span>${ic('arrow-up-right', 15)}</a>
+    view(shell(`<div class="body"><div class="connect"><h2>Connect call session</h2><p class="mute" style="margin:0 0 14px">The session runs until you end it.</p>
       <div id="chk"></div>
-      <div class="wcard" role="note">${ic('headphones', 18)}<div><b>Desktop app required for the other side's audio</b><p>To hear the other side of the call, ${BRAND.name} captures your computer's audio, which needs permission from your operating system and, on macOS, a loopback device such as BlackHole. Without it ${BRAND.name} only hears your microphone. Test in a safe environment before the real call.</p></div></div>
+      <div class="note warn">${ic('headphones', 16)}<div>To hear the other side of the call, ${BRAND.name} captures your computer's audio. Windows works out of the box. On macOS you need a loopback device such as BlackHole; without it ${BRAND.name} only hears your microphone.</div></div>
+      <div class="note">${ic('shield-check', 16)}<div>Test in a safe environment before the real call. Speech goes to your caption engine and questions (with your resume/JD as context) to your answer engine; sessions and files stay on this computer.</div></div>
       <div class="row" style="margin-top:6px"><button class="btn ghost grow" id="back">Back</button><button class="btn primary grow" id="go">${ic('power', 15)}Connect</button></div></div></div>`)); bindHeader();
     setupPanel($('#chk'), s.language);
-    $('#tut').onclick = (e) => { e.preventDefault(); modal(GUIDE, (b, close) => ($('[data-x]', b).onclick = close)); };
     $('#back').onclick = viewList; $('#go').onclick = () => viewLive(sid);
   }
 
@@ -140,24 +232,16 @@ if (MODE === 'widget') (() => {
     S = await cue.settings.get();
     const lines = []; const interim = {}; const answers = []; let idx = -1; let current = null; let chatMode = false; let pendingQ = []; let autoTimer = null;
     const channels = []; const t0 = Date.now(); const perf = { stt: null };
-    cue.win.size(940, 236); cue.win.liveHotkeys(true);
+    cue.win.size(940, 190); cue.win.liveHotkeys(true);
     await cue.sessions.update(sid, { status: 'live' });
     $('#bubLogo').classList.add('run');
 
-    const LH = 236, PH = 580; // window heights: HUD + caption bar only / with the answer panel open
-    view(`<div class="live-root">${railHTML()}<div class="lcol"><div class="hud glass" role="toolbar" aria-label="Answer HUD">
-      <div class="hsearch">${ic('search', 14)}<input id="hSearch" placeholder="Search answers" aria-label="Search answers" autocomplete="off" /></div>
-      <span class="hstat" id="hStat" role="status" data-s="ready"><i></i><span>Ready</span></span>
-      <div class="hpage"><button class="nb" id="hPrev" title="Previous answer (${MOD}←)" aria-label="Previous answer">${ic('chevron-left', 14)}</button><span class="cnt" id="hCnt" aria-live="polite">0 of 0</span><button class="nb" id="hNext" title="Next answer (${MOD}→)" aria-label="Next answer">${ic('chevron-right', 14)}</button></div>
-      <button class="lbtn sq" id="hType" title="Type a question (${MOD}⇧␣)" aria-label="Type a question">${ic('pen-line', 16)}</button>
-      <label class="hop" title="Window opacity">${ic('eye', 14)}<input type="range" id="op" min="40" max="100" value="100" aria-label="Opacity" /></label>
-      <button class="lbtn sq" id="hAux" title="More" aria-label="More options" aria-haspopup="true">${ic('chevron-down', 16)}</button></div>
-      <div class="lbar glass"><div class="dev"><span id="dMic" title="Microphone">${ic('mic', 15)}</span><span id="dSys" title="System audio">${ic('volume-2', 15)}</span></div>
+    view(`<div class="live-root"><div class="lbar glass"><div class="dev"><span id="dMic" title="Microphone">${ic('mic', 15)}</span><span id="dSys" title="System audio">${ic('volume-2', 15)}</span></div>
       <button class="lbtn primary" id="bAns">${ic('sparkles', 15)}Answer<kbd>${MOD}↵</kbd></button><button class="lbtn" id="bShot">${ic('camera', 15)}Screenshot<kbd>${MOD}⇧↵</kbd></button><button class="lbtn" id="bChat">${ic('message-square-text', 15)}Chat<kbd>${MOD}⇧␣</kbd></button>
       ${s.type === 'mock' ? `<button class="lbtn" id="bNext">${ic('mic', 15)}Next question</button>` : ''}<div class="grow"></div>
-      <button class="timer" id="timer" title="End session">0:00</button></div>
+      <button class="lbtn sq" id="lMove" title="Move (${MOD} + ⇧ + ✥)">${ic('move', 16)}</button><button class="lbtn sq" id="lCollapse" title="Hide">${ic('minimize-2', 16)}</button><button class="lbtn sq" id="lMenu" title="Menu">${ic('ellipsis-vertical', 16)}</button><button class="timer" id="timer" title="End session">0:00</button></div>
       <div class="lstat glass"><div class="wave idle" id="wave"><i></i><i></i><i></i><i></i></div><div class="txt" id="ltxt">Connecting…</div><button class="lbtn" id="bClearTx">${ic('eraser', 15)}Clear<kbd>${MOD}⇧⌫</kbd></button></div>
-      <div class="apanel glass" id="panel" style="display:none"></div></div></div>`);
+      <div class="apanel glass" id="panel" style="display:none"></div></div>`);
 
     const setStatus = (t) => ($('#ltxt').textContent = t);
     const refreshLine = () => {
@@ -199,28 +283,18 @@ if (MODE === 'widget') (() => {
     // --- answer panel ---
     function renderPanel() {
       const p = $('#panel');
-      const vis = visible(); if (idx >= 0 && filter && !vis.includes(idx) && vis.length) idx = vis[0];
-      if (idx < 0) { p.style.display = 'none'; cue.win.size(940, LH); return hudPaint(); }
-      if (p.style.display === 'none') { p.style.display = 'flex'; cue.win.size(940, PH); }
-      if (filter && !vis.length) { p.innerHTML = `<div class="nav"><div class="grow"></div><button class="lbtn" id="pClear">${ic('eraser', 14)}Clear<kbd>${MOD}⌫</kbd></button></div><div class="empty">${ic('search', 24)}<span>No answers match “${esc($('#hSearch').value)}”.</span></div>`; $('#pClear').onclick = clearAnswers; return hudPaint(); }
+      if (idx < 0) { p.style.display = 'none'; cue.win.size(940, 190); return; }
       const a = answers[idx];
+      if (p.style.display === 'none') { p.style.display = 'flex'; cue.win.size(940, 520); }
       const live = current && current.a === a;
-      p.innerHTML = `<div class="nav"><div class="grow"></div><button class="lbtn sq" id="pCopy" title="Copy answer">${ic('copy', 15)}</button><button class="lbtn" id="pClear">${ic('eraser', 14)}Clear<kbd>${MOD}⌫</kbd></button></div>
+      p.innerHTML = `<div class="nav"><button class="nb" id="pPrev" title="Previous">${ic('chevron-left', 14)}${MOD}←</button><button class="nb" id="pNext" title="Next">${MOD}→${ic('chevron-right', 14)}</button><span class="cnt">${idx + 1} / ${answers.length}</span><div class="grow"></div><button class="lbtn sq" id="pCopy" title="Copy answer">${ic('copy', 15)}</button><button class="lbtn" id="pClear">${ic('eraser', 14)}Clear<kbd>${MOD}⌫</kbd></button></div>
         <div class="acard"><div class="q">${ic('message-square-text', 15)}<span>${esc(a.q)}</span></div><div class="a ${live ? 'live' : ''}">${md(a.a || '…')}</div><div class="meta">${esc(a.kind)} · ${new Date(a.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${a.stats ? `${a.stats.model ? ' · ' + esc(a.stats.model.split(':').slice(1).join(':')) : ''} · first word ${a.stats.ttft != null ? (a.stats.ttft / 1000).toFixed(1) + 's' : '—'}${a.stats.tps ? ` · ${a.stats.tps} tok/s` : ''}${a.stats.promptTokens ? ` · ${a.stats.promptTokens} prompt tokens` : ''}` : ''}${a.sttMs ? ` · speech→text ${(a.sttMs / 1000).toFixed(1)}s` : ''}</div></div>`;
+      $('#pPrev').onclick = () => nav(-1); $('#pNext').onclick = () => nav(1);
       $('#pCopy').onclick = () => { navigator.clipboard.writeText(a.a); toast('Copied', 1200); };
-      $('#pClear').onclick = clearAnswers; hudPaint();
+      $('#pClear').onclick = clearAnswers;
     }
-    // HUD: search filters the answers; the pager steps through the matches; the status pill follows the current answer.
-    let filter = '';
-    const visible = () => answers.map((_a, i) => i).filter((i) => !filter || `${answers[i].q} ${answers[i].a}`.toLowerCase().includes(filter));
-    function hudPaint() {
-      const vis = visible(), pos = vis.indexOf(idx), st = current ? 'answering' : answers.length ? 'answered' : 'ready';
-      const c = $('#hCnt'); if (c) c.textContent = vis.length ? `${pos < 0 ? 1 : pos + 1} of ${vis.length}` : '0 of 0';
-      const h = $('#hStat'); if (h) { h.dataset.s = st; h.lastElementChild.textContent = { answering: 'Answering…', answered: 'Answered', ready: 'Ready' }[st]; }
-      ['#hPrev', '#hNext'].forEach((q) => { const b = $(q); if (b) b.disabled = vis.length < 2; });
-    }
-    const nav = (d) => { const vis = visible(); if (!vis.length) return; const pos = vis.indexOf(idx); idx = vis[(pos + d + vis.length) % vis.length]; renderPanel(); };
-    function clearAnswers() { answers.length = 0; idx = -1; filter = ''; $('#hSearch').value = ''; renderPanel(); }
+    const nav = (d) => { if (!answers.length) return; idx = (idx + d + answers.length) % answers.length; renderPanel(); };
+    function clearAnswers() { answers.length = 0; idx = -1; renderPanel(); }
 
     const early = {}; // events that arrive before ask() has returned its request id
     const onChunk = ({ reqId, text }) => { if (!current || current.reqId !== reqId) { (early[reqId] ||= []).push(['c', { reqId, text }]); return; } current.a.a += text; if (answers[idx] === current.a) { const el = $('.acard .a'); if (el) el.innerHTML = md(current.a.a); } };
@@ -232,7 +306,7 @@ if (MODE === 'widget') (() => {
       const lastQ = pendingQ.join(' ').trim();
       const q = typed || (image ? 'Screenshot analysis' : lastQ || 'Latest part of the conversation');
       const question = typed || (image ? '' : lastQ ? `Answer this question that was just asked in the conversation: ${lastQ}` : '');
-      const a = { kind, q, a: '', t: Date.now(), sttMs: perf.stt }; filter = ''; $('#hSearch').value = ''; answers.push(a); idx = answers.length - 1; renderPanel();
+      const a = { kind, q, a: '', t: Date.now(), sttMs: perf.stt }; answers.push(a); idx = answers.length - 1; renderPanel();
       try {
         const reqId = await cue.llm.ask({ sessionId: sid, question, image, transcript: lines }); current = { reqId, a };
         pendingQ = []; renderPanel();
@@ -248,17 +322,14 @@ if (MODE === 'widget') (() => {
     const clearTx = () => { lines.length = 0; for (const k in interim) delete interim[k]; pendingQ = []; persist(); refreshLine(); };
 
     $('#bAns').onclick = () => ask({}); $('#bShot').onclick = shot; $('#bChat').onclick = openChat; $('#bClearTx').onclick = clearTx;
-    const grow = () => { cue.win.size(940, Math.max(idx >= 0 ? PH : LH, 420)); return () => cue.win.size(940, idx >= 0 ? PH : LH); }; // menus need room: the window is only a strip
-    bindRail({ live: true, end: () => end(), grow });
-    $('#hSearch').oninput = (e) => { filter = e.target.value.trim().toLowerCase(); if (idx < 0 && answers.length) idx = answers.length - 1; renderPanel(); };
-    $('#hPrev').onclick = () => nav(-1); $('#hNext').onclick = () => nav(1); $('#hType').onclick = openChat;
-    $('#op').oninput = (ev) => cue.win.opacity(ev.target.value / 100);
-    $('#hAux').onclick = (e) => { const release = grow(); popMenu(e.currentTarget, `<div class="it" data-a="sum">${ic('book-open', 15)}<span class="grow">Summarize session</span></div><div class="it" data-a="dash">${ic('layout-grid', 15)}<span class="grow">Dashboard</span>${ic('arrow-up-right', 14)}</div><div class="it" data-a="screen">${ic('monitor', 15)}<span class="grow">Next Screen</span></div><div class="sep"></div><div class="it" data-a="end">${ic('power', 15)}<span class="grow">End session</span></div>`, (m, close) => {
-      const t = setInterval(() => { if (!m.isConnected) { clearInterval(t); release(); } }, 250);
+    $('#lCollapse').onclick = hide; $('#lMove').onclick = (e) => zonePicker(e.currentTarget);
+    $('#lMenu').onclick = (e) => popMenu(e.currentTarget, `<div class="it" data-a="sum">${ic('book-open', 15)}<span class="grow">Summarize session</span></div><div class="it" data-a="dash">${ic('layout-grid', 15)}<span class="grow">Dashboard</span>${ic('arrow-up-right', 14)}</div><div class="it" data-a="screen">${ic('monitor', 15)}<span class="grow">Next Screen</span></div>
+      <div class="it">${ic('eye', 15)}<span class="grow">Opacity</span><input type="range" min="40" max="100" value="100" id="op" style="width:90px"></div><div class="sep"></div><div class="it" data-a="end">${ic('power', 15)}<span class="grow">End session</span></div>`, (m, close) => {
+      $('#op', m).oninput = (ev) => cue.win.opacity(ev.target.value / 100);
       m.onclick = async (ev) => { const a = ev.target.closest('[data-a]')?.dataset.a; if (!a) return; close();
         if (a === 'dash') cue.win.openDashboard('sessions'); if (a === 'screen') cue.win.nextScreen(); if (a === 'end') end();
-        if (a === 'sum') { toast('Summarizing…'); try { textModal('Session summary', await cue.llm.summarize(sid)); } catch (err) { toast(err.message, 5000); } } };
-    }); };
+        if (a === 'sum') { toast('Summarizing…'); try { textModal('Session summary', await cue.llm.summarize(sid)); } catch (e) { toast(e.message, 5000); } } };
+    });
     if ($('#bNext')) $('#bNext').onclick = async () => {
       const resume = s.resumeId ? (await cue.docs.preview(s.resumeId)).slice(0, 8000) : '';
       const asked = lines.filter((l) => l.speaker === 'Interviewer').map((l) => l.text).join('\n');

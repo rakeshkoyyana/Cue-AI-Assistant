@@ -57,9 +57,10 @@ app.whenReady().then(async () => {
     await js(`document.body.click()`);
     await click('#create'); await sleep(700); await shot(w, '03-wizard1');
     await js(`document.querySelector('#company').value='Acme';document.querySelector('#company').dispatchEvent(new Event('input'))`);
-    await js(`document.querySelector('#resumes .fitem') && document.querySelector('#resumes .fitem').click()`); await sleep(300); await shot(w, '04-picker');
+    await click('#resumeBtn'); await sleep(400); await shot(w, '04-picker');
+    await js(`document.querySelector('.menu .it[data-id]').click()`); await sleep(300);
     await click('#next'); await sleep(700); await shot(w, '05-wizard2');
-    await click('#save'); await sleep(900);
+    await click('#create'); await sleep(900);
     await js('location.reload()'); await sleep(800);
     await js(`document.querySelector('[data-start]').click()`); await sleep(1200); await shot(w, '06-connect');
     await click('#go'); await sleep(2500);

@@ -25,7 +25,7 @@ Screenshots go straight to vision-capable models (OpenAI, Gemini, Claude); Groq 
 Name and logo live in `renderer/brand.js` (`BRAND.name`, `BRAND.mark`). `node tools/render-sheet.js` renders the logo option sheet.
 
 ### Development
-`npm run icons` regenerates `renderer/icons.js` from Lucide. `npm run test:video`, `test:analyzer` and `test:catalog` run plain-Node tests; `npm run test:smoke` runs a headless UI test against a mocked Ollama.
+`npm run icons` regenerates `renderer/icons.js` from Lucide. `npm run test:smoke` runs a headless UI test against a mocked Ollama.
 
 ## Run
 ```
@@ -39,16 +39,14 @@ Click the ⋮ menu in the widget → **Settings** and add:
 ## What's inside
 **Widget (floating, always on top)**
 - Session list with search + sort, Ready/Ended status, Start Session
-- Create Session wizard (also used to edit a session): step 1 has Interview / Regular / Mock tabs, a job-link import, a searchable Company/School combobox (type `UST`), a resume list beside a multi-select documents list, and optional title/description; step 2 has a language search overlay, model cards with speed/accuracy tags, Format / Length / Tone dialogs (plus STAR and code toggles), AI instructions, Auto Generate, Save Transcript and a live Answer Preview. The same option ids build the system prompt, so the preview matches real answers.
+- Create Session wizard: Interview (company, role, job description, resume, documents, *import from job link*) or Regular (title, description, documents, **whole project folder as context**), then Preferences (language, model, answer style/format, AI instructions, Auto Generate, Save Transcript)
 - Connect screen → live overlay: Answer, Screenshot, Chat, live transcript (mic = You, system audio = Interviewer/Participant), answer cards with prev/next and copy, timer, opacity, summarize
 - ⋮ menu: Dashboard, Next Screen, Settings, Zoom, Theme (light/dark/system)
 
 **Dashboard window**
 - Call Sessions (Active/Past, tabs, grid/list, View Transcript), Resumes, Documents
 - Session Video: pick a local recording and extract 1 frame/second (max 1280 px wide) with live progress, cancel, and a clear-frames button. Needs `ffmpeg` (`brew install ffmpeg`)
-- Prepare: Question Bank, Audio Rehearsal (AI interviewer speaks questions aloud), Resume Maker
-- Session detail (dashboard): recording card with a live waveform (a file you choose; read locally, never uploaded or stored), metadata, View Session / View Transcript, summary, Q&A log and a review checklist saved with the session. Call Sessions filters All / Active / Past.
-- Widget: borderless left rail (Close, Options, Move, Shrink, show-on-all-workspaces), a live HUD (answer search, status, “k of N” pager, type-a-question, opacity), and an Options grid (Dashboard, next screen, Settings, zoom, theme, logout). There is intentionally no option to hide the window from screen capture.
+- Prepare: Question Bank, Mock Interview (AI interviewer speaks questions aloud), Resume Maker
 
 ## Hotkeys (active only during a live session)
 Ctrl/⌘+Enter Answer · Ctrl/⌘+Shift+Enter Screenshot · Ctrl/⌘+Shift+Space Chat · Ctrl/⌘+Shift+Backspace Clear transcript · Ctrl/⌘+←/→ previous/next answer · Ctrl/⌘+Shift+H hide/show window

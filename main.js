@@ -103,42 +103,55 @@ function buildSystem(s, db, compact = false) {
 // ---------- LLM ----------
 const aborts = new Map();
 const KEY_OF = { openai: 'openaiKey', gemini: 'geminiKey', anthropic: 'anthropicKey', groq: 'groqKey' };
-const DEFAULT_OF = { openai: 'gpt-5.6-luna', gemini: 'gemini-3.5-flash-lite', anthropic: 'claude-haiku-4-5-20251001', groq: 'openai/gpt-oss-120b' };
+const DEFAULT_OF = { gemini: 'gemini-3.8-flash', openai: 'gpt-5.6-luna', anthropic: 'claude-haiku-4-5-20251001', groq: 'openai/gpt-oss-120b' };
+const ORDER = ['gemini', 'openai', 'anthropic', 'groq'];
 // "provider:model" → the engine to use. If that provider has no key, use the first provider that does.
 function resolveModel(model) {
   const st = getSettings(false);
   let [p, ...rest] = String(model || st.defaultModel || '').split(':'); let name = rest.join(':');
   if (!KEY_OF[p] || !st[KEY_OF[p]]) {
-    const avail = ['openai', 'gemini', 'anthropic', 'groq'].find((x) => st[KEY_OF[x]]);
-    if (!avail) throw new Error('Add an AI key in Settings (⋮ menu) — OpenAI, Google Gemini, Anthropic, or free Groq.');
+    const avail = ORDER.find((x) => st[KEY_OF[x]]);
+    if (!avail) throw new Error('Add an AI key in Settings (⋮ menu) — Google Gemini (free), OpenAI, Anthropic, or Groq (free).');
     const [dp, ...dr] = String(st.defaultModel || '').split(':');
     if (dp === avail && dr.length) { p = dp; name = dr.join(':'); } else { p = avail; name = DEFAULT_OF[avail]; }
   }
   return { provider: p, name: name || DEFAULT_OF[p] };
 }
+async function runEngine(m, st, { system, messages, image, signal, mark }) {
+  if (m.provider === 'anthropic') {
+    const Anthropic = require('@anthropic-ai/sdk');
+    const client = new Anthropic({ apiKey: st.anthropicKey });
+    const msgs = messages.map((x, i) => image && i === messages.length - 1 && x.role === 'user'
+      ? { role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: image } }, { type: 'text', text: x.content }] } : x);
+    const t1 = Date.now(); let tf = 0;
+    const stream = client.messages.stream({ model: m.name, max_tokens: 2048, system, messages: msgs }, { signal });
+    stream.on('text', (t) => { if (!tf) tf = Date.now(); mark(t); });
+    const fin = await stream.finalMessage();
+    return { model: m.name, promptTokens: fin.usage?.input_tokens || null, tps: tf ? Math.round((fin.usage?.output_tokens || 0) / Math.max(0.05, (Date.now() - tf) / 1000)) : null, ttft: tf ? tf - t1 : null };
+  }
+  let img = image, msgs = messages;
+  if (image && m.provider === 'groq') { // Groq's text models can't see images: read the screenshot with local OCR and send the text
+    const text = await ai.ocr(image, path.join(app.getPath('userData'), 'ocr')).catch((e) => { throw new Error('Screenshot text recognition failed (' + e.message + ').'); });
+    msgs = messages.map((x, i) => (i === messages.length - 1 ? { ...x, content: x.content + `\n\n# Text read from my screen (OCR, may contain errors)\n${text || '(nothing readable)'}` } : x)); img = null;
+  }
+  return ai.chatStream({ provider: m.provider, key: st[KEY_OF[m.provider]], model: m.name, system, messages: msgs, image: img, signal, onText: mark });
+}
+// Tries the chosen engine; if it is rate-limited or down before any text arrives, moves to the next engine that has a key.
 async function streamLLM({ system, messages, image, reqId, onText, onStats, model }) {
   const tStart = Date.now(); let tFirst = 0; const mark = (t) => { if (!tFirst && t) tFirst = Date.now(); onText(t); };
-  const st = getSettings(false); const m = resolveModel(model);
+  const st = getSettings(false); const first = resolveModel(model);
+  const cands = [first, ...ORDER.filter((p) => p !== first.provider && st[KEY_OF[p]]).map((p) => ({ provider: p, name: DEFAULT_OF[p] }))];
   const ctrl = new AbortController(); aborts.set(reqId, ctrl);
   try {
-    if (m.provider === 'anthropic') {
-      const Anthropic = require('@anthropic-ai/sdk');
-      const client = new Anthropic({ apiKey: st.anthropicKey });
-      const msgs = messages.map((x, i) => image && i === messages.length - 1 && x.role === 'user'
-        ? { role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: image } }, { type: 'text', text: x.content }] } : x);
-      const stream = client.messages.stream({ model: m.name, max_tokens: 2048, system, messages: msgs }, { signal: ctrl.signal });
-      stream.on('text', mark);
-      const fin = await stream.finalMessage();
-      onStats && onStats({ model: m.name, ttft: tFirst ? tFirst - tStart : null, promptTokens: fin.usage?.input_tokens || null, tps: tFirst ? Math.round((fin.usage?.output_tokens || 0) / Math.max(0.05, (Date.now() - tFirst) / 1000)) : null });
-    } else {
-      let img = image;
-      if (image && m.provider === 'groq') { // Groq's fast text models can't see images: read the screenshot with local OCR and send the text
-        const text = await ai.ocr(image, path.join(app.getPath('userData'), 'ocr')).catch((e) => { throw new Error('Screenshot text recognition failed (' + e.message + ').'); });
-        messages = messages.map((x, i) => (i === messages.length - 1 ? { ...x, content: x.content + `\n\n# Text read from my screen (OCR, may contain errors)\n${text || '(nothing readable)'}` } : x)); img = null;
+    for (let i = 0; i < cands.length; i++) {
+      try {
+        const stats = await runEngine(cands[i], st, { system, messages, image, signal: ctrl.signal, mark });
+        onStats && onStats({ ...stats, model: `${cands[i].provider}:${stats.model || cands[i].name}`, ttft: tFirst ? tFirst - tStart : stats.ttft });
+        return;
+      } catch (e) {
+        const transient = e.status === 429 || e.status === 529 || (e.status >= 500 && e.status < 600) || /fetch failed|ECONN|ETIMEDOUT/i.test(e.message || '');
+        if (tFirst || !transient || i === cands.length - 1 || e.name === 'AbortError') throw e;
       }
-      const opts = { provider: m.provider, key: st[KEY_OF[m.provider]], model: m.name, system, messages, image: img, signal: ctrl.signal, onText: mark };
-      const stats = m.provider === 'groq' ? await ai.groqChatWithFallback(opts) : await ai.chatStream(opts);
-      onStats && onStats({ ...stats, ttft: tFirst ? tFirst - tStart : stats.ttft });
     }
   } finally { aborts.delete(reqId); }
 }

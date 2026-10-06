@@ -15,7 +15,7 @@ const mock = http.createServer((req, res) => {
     if (req.url === '/openai/v1/audio/transcriptions') { global.__wavOk = b.includes('RIFF') && b.includes('whisper-large-v3-turbo'); res.end('{"text":"Tell me about yourself."}'); return; }
     if (req.url === '/openai/v1/chat/completions') {
       const j = JSON.parse(b); global.__lastChat = j; global.__models.push(j.model + (j.max_completion_tokens ? '[mct]' : '') + (j.reasoning_effort ? '[' + j.reasoning_effort + ']' : ''));
-      if (j.model === 'openai/gpt-oss-120b' && first429) { first429 = false; res.statusCode = 429; res.setHeader('retry-after', '7'); res.end('{"error":{"message":"rate limit"}}'); return; }
+      if (j.model === 'gemini-3.8-flash' && first429) { first429 = false; res.statusCode = 429; res.setHeader('retry-after', '7'); res.end('{"error":{"message":"rate limit"}}'); return; }
       res.setHeader('content-type', 'text/event-stream');
       res.write('data: ' + JSON.stringify({ choices: [{ delta: { content: '<think>planning the answer' } }] }) + '\n\n'); res.write('data: ' + JSON.stringify({ choices: [{ delta: { content: '…</think>' } }] }) + '\n\n');
       for (const w of 'I led the migration of our nightly pipelines to **PySpark on Databricks**, cutting runtime by about half.'.split(' ')) { res.write('data: ' + JSON.stringify({ choices: [{ delta: { content: w + ' ' } }] }) + '\n\n'); await sleep(10); }
@@ -35,7 +35,7 @@ app.whenReady().then(async () => {
     const shot = async (win, name) => { console.log('shot', name); await sleep(450); const img = await win.webContents.capturePage(); fs.writeFileSync(`${OUT}/${name}.png`, img.toPNG()); };
     const click = (sel) => js(`document.querySelector(${JSON.stringify(sel)}).click()`);
     await shot(w, '01-empty');
-    await js(`cue.settings.set({groqKey:'gsk_test', openaiKey:'gsk_test', geminiKey:'gsk_test', defaultModel:'openai:gpt-5.6-luna'})`);
+    await js(`cue.settings.set({groqKey:'gsk_test', openaiKey:'gsk_test', geminiKey:'gsk_test', defaultModel:'gemini:gemini-3.8-flash'})`);
     console.log('key tests:', JSON.stringify(await js(`Promise.all(['openai','gemini','groq'].map((p)=>cue.setup.test(p)))`)));
     const tr = await js(`cue.stt.transcribe(new Float32Array(16000).map((_, i) => Math.sin(i / 5) * 0.2), 'en')`); console.log('transcribe:', JSON.stringify(tr), 'wavOk', global.__wavOk);
     // seed

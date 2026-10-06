@@ -8,15 +8,6 @@ const BASES = {
 };
 const LABEL = { openai: 'OpenAI', gemini: 'Google Gemini', groq: 'Groq', anthropic: 'Anthropic' };
 
-// Fastest-first fallbacks used when a model hits its free-tier rate limit.
-const GROQ_MODELS = [
-  { id: 'openai/gpt-oss-120b', label: 'GPT-OSS 120B · best answers' },
-  { id: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B · natural tone' },
-  { id: 'openai/gpt-oss-20b', label: 'GPT-OSS 20B · fastest' },
-  { id: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B · highest daily limit' },
-];
-const FALLBACK = { 'openai/gpt-oss-120b': 'llama-3.3-70b-versatile', 'llama-3.3-70b-versatile': 'openai/gpt-oss-20b', 'openai/gpt-oss-20b': 'llama-3.1-8b-instant' };
-
 class CloudError extends Error { constructor(msg, status, retryAfter) { super(msg); this.status = status; this.retryAfter = retryAfter; } }
 async function apiError(res, what, provider = 'groq') {
   const body = await res.text().catch(() => ''); let msg = body; try { const j = JSON.parse(body); msg = (Array.isArray(j) ? j[0] : j).error?.message || body; } catch {}
@@ -54,16 +45,6 @@ async function chatStream({ provider, key, model, system, messages, image, signa
   }
   const secs = usage?.completion_time || (tFirst ? (Date.now() - tFirst) / 1000 : 0); const outTok = usage?.completion_tokens || Math.round(chars / 4);
   return { model, ttft: tFirst ? tFirst - t0 : null, promptTokens: usage?.prompt_tokens || null, tps: secs > 0.05 ? Math.round(outTok / secs) : null };
-}
-
-const groqChat = (o) => chatStream({ ...o, provider: 'groq' });
-// Same, but steps down to a lighter model if the chosen one is rate-limited (only before any text was streamed).
-async function groqChatWithFallback(opts) {
-  let model = opts.model, streamed = false;
-  for (;;) {
-    try { return await groqChat({ ...opts, model, onText: (t) => { streamed = true; opts.onText(t); } }); }
-    catch (e) { if (e.status === 429 && !streamed && FALLBACK[model]) { model = FALLBACK[model]; continue; } throw e; }
-  }
 }
 
 // ---------- speech-to-text (Groq Whisper) ----------
@@ -109,4 +90,4 @@ async function ocr(base64, dir) {
 }
 async function ocrStop() { try { await ocrWorker?.terminate(); } catch {} ocrWorker = null; }
 
-module.exports = { GROQ_MODELS, chatStream, groqChatWithFallback, groqTranscribe, testKey, ocr, ocrStop, wav16k };
+module.exports = { chatStream, groqTranscribe, testKey, ocr, ocrStop, wav16k };

@@ -35,11 +35,11 @@ function popMenu(anchor, html, onMount) {
 const LANGS = { en: 'English', es: 'Spanish', fr: 'French', de: 'German', hi: 'Hindi', pt: 'Portuguese', it: 'Italian', nl: 'Dutch', ja: 'Japanese', ko: 'Korean', zh: 'Chinese', ru: 'Russian' };
 // Free local AI is always first; cloud models only appear once an API key has been added (optional, future scope).
 // Answer models by provider. A provider's models are selectable once its key is added in Settings.
-const PROVIDERS = [
-  { id: 'openai', name: 'OpenAI', key: 'openaiKey', url: 'https://platform.openai.com/api-keys', note: 'paid, pay-per-use', models: [['gpt-5.6-luna', 'GPT-5.6 Luna · fast']] },
-  { id: 'gemini', name: 'Google Gemini', key: 'geminiKey', url: 'https://aistudio.google.com/apikey', note: 'free tier available (free-tier prompts may be used by Google to improve models)', models: [['gemini-3.5-flash-lite', 'Gemini 3.5 Flash-Lite · fastest'], ['gemini-3.8-flash', 'Gemini 3.8 Flash · smarter']] },
+const PROVIDERS = [ // only strong, fast models — weaker ones are intentionally not offered
+  { id: 'gemini', name: 'Google Gemini', key: 'geminiKey', url: 'https://aistudio.google.com/apikey', note: 'free tier — best free option; free-tier prompts may be used by Google', models: [['gemini-3.8-flash', 'Gemini 3.8 Flash · best free'], ['gemini-3.5-flash-lite', 'Gemini 3.5 Flash-Lite · fastest free']] },
+  { id: 'openai', name: 'OpenAI', key: 'openaiKey', url: 'https://platform.openai.com/api-keys', note: 'paid, pay-per-use', models: [['gpt-5.6-luna', 'GPT-5.6 Luna']] },
   { id: 'anthropic', name: 'Anthropic Claude', key: 'anthropicKey', url: 'https://console.anthropic.com/settings/keys', note: 'paid, pay-per-use', models: [['claude-haiku-4-5-20251001', 'Claude Haiku 4.5 · fast'], ['claude-sonnet-5-5', 'Claude Sonnet 5.5 · best']] },
-  { id: 'groq', name: 'Groq', key: 'groqKey', url: 'https://console.groq.com/keys', note: 'free tier, open models', models: [['openai/gpt-oss-120b', 'GPT-OSS 120B'], ['llama-3.3-70b-versatile', 'Llama 3.3 70B'], ['openai/gpt-oss-20b', 'GPT-OSS 20B · fastest']] },
+  { id: 'groq', name: 'Groq', key: 'groqKey', url: 'https://console.groq.com/keys', note: 'free tier — automatic backup + captions without Deepgram', models: [['openai/gpt-oss-120b', 'GPT-OSS 120B · free backup']] },
 ];
 const modelList = (S = {}) => PROVIDERS.flatMap((p) => p.models.map(([id, label]) => ({ id: `${p.id}:${id}`, label: `${p.name} — ${label}`, disabled: !S[p.key] })));
 const modelOptions = (S, sel) => { const list = modelList(S); const cur = sel || S.defaultModel || (list.find((m) => !m.disabled) || {}).id || '';

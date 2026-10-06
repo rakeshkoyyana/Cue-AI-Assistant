@@ -18,6 +18,13 @@ contextBridge.exposeInMainWorld('cue', {
     onChunk: (cb) => on('llm:chunk', cb), onDone: (cb) => on('llm:done', cb),
   },
   capture: { screenshot: () => inv('capture:screenshot') },
+  video: {
+    check: () => inv('video:check'), pick: () => inv('video:pick'),
+    // Returns { jobId, done } right away so the caller can cancel; `done` resolves to { ok, frames, dir, count } or { ok: false, error }.
+    extract: (filePath) => { const jobId = 'v' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8); return { jobId, done: inv('video:extract', { jobId, filePath }) }; },
+    cancel: (jobId) => inv('video:cancel', jobId), clearCache: () => inv('video:clearCache'),
+    onProgress: (cb) => on('video:progress', cb),
+  },
   deepgramKey: () => inv('deepgram:key'),
   setup: { status: () => inv('setup:status'), test: (which) => inv('setup:test', which), open: (u) => inv('app:openExternal', u) },
   stt: { transcribe: (samples, lang) => inv('stt:transcribe', samples, lang) },

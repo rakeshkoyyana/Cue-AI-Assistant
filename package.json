@@ -8,6 +8,7 @@
     "dist": "electron-builder",
     "icons": "node tools/build-icons.js",
     "test:smoke": "xvfb-run -a electron --no-sandbox tools/smoke.js",
+    "test:video": "node tools/video-test.js",
     "mac": "electron-builder --mac dir",
     "install-mac": "bash tools/install-mac.sh",
     "icon": "xvfb-run -a electron --no-sandbox tools/render-icon.js || electron tools/render-icon.js"
@@ -31,6 +32,7 @@
       "main.js",
       "preload.js",
       "cloud.js",
+      "video.js",
       "renderer/**/*",
       "package.json"
     ],
@@ -59,5 +61,3 @@
     "compression": "store"
   }
 }
-
-package.json

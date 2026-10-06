@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const os = require('os');
+const video = require('./video');
 
 // One data folder for both `npm start` and the packaged "Cue AI.app" (copies the old dev folder once).
 if (!process.env.CUE_TEST) {
@@ -293,6 +294,8 @@ function registerIpc() {
   ipcMain.handle('dashboard:open', (_e, hash) => openDashboard(hash));
   ipcMain.handle('widget:startSession', (_e, sid) => { widget.show(); widget.focus(); send(widget, 'goto-live', sid); });
   ipcMain.handle('hotkeys:live', (_e, on) => setLiveHotkeys(on));
+
+  video.register({ ipcMain, app, dialog, BrowserWindow }); // video:check / pick / extract / cancel / clearCache
 }
 
 // ---------- 6-zone positioning (3 columns × 2 rows of the current screen) ----------
@@ -357,5 +360,5 @@ app.whenReady().then(() => {
   globalShortcut.register('CommandOrControl+Shift+H', () => widget && (widget.isVisible() ? widget.hide() : widget.show()));
   setMoveKeys(true);
 });
-app.on('will-quit', () => { globalShortcut.unregisterAll(); ai.ocrStop(); });
+app.on('will-quit', () => { globalShortcut.unregisterAll(); ai.ocrStop(); video.shutdown(); });
 app.on('window-all-closed', () => app.quit());

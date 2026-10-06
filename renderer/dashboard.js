@@ -21,12 +21,12 @@ if (MODE === 'dashboard') (() => {
   const filterSort = (rows, nameOf, dateOf) => {
     const q = st.q.toLowerCase();
     rows = rows.filter((r) => !q || nameOf(r).toLowerCase().includes(q));
-    return rows.sort((a, b) => (st.sort === 'new' ? dateOf(b) - dateOf(a) : st.sort === 'old' ? dateOf(a) - dateOf(b) : nameOf(a).localeCompare(nameOf(b))));
+    return sortRows(rows, st.sort, dateOf);
   };
   const toolbar = (ph, extra = '') => `<div class="tools"><div class="sbox">${ic('search', 15)}<input id="q" placeholder="${ph}" value="${esc(st.q)}" /></div><button class="ib boxed" id="sort" title="Sort" style="width:38px;height:38px">${ic('arrow-up-down', 16)}</button><div class="grow"></div>${extra}<button class="ib boxed" id="lay" title="Toggle layout" style="width:38px;height:38px">${ic(st.layout === 'grid' ? 'list' : 'layout-grid', 16)}</button></div>`;
   const bindToolbar = () => {
     $('#q').oninput = (e) => { st.q = e.target.value; const pos = e.target.selectionStart; render(); const q = $('#q'); q.focus(); q.setSelectionRange(pos, pos); };
-    $('#sort').onclick = () => { st.sort = { new: 'old', old: 'az', az: 'new' }[st.sort]; toast('Sorted: ' + { new: 'newest first', old: 'oldest first', az: 'A–Z' }[st.sort], 1200); render(); };
+    $('#sort').onclick = (e) => sortMenu(e.currentTarget, st.sort, (v) => { st.sort = v; render(); }, page === 'sessions' ? SORTS : SORTS.filter(([v]) => v !== 'status'));
     $('#lay').onclick = () => { st.layout = st.layout === 'grid' ? 'list' : 'grid'; render(); };
   };
   const tabs = (list) => `<div class="tabsb">${list.map(([id, l]) => `<button data-t="${id}" class="${st.tab === id ? 'on' : ''}">${l}</button>`).join('')}</div>`;

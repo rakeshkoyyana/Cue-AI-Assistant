@@ -1,6 +1,6 @@
 if (MODE === 'widget') (() => {
   let S = {};            // global settings
-  let sortMode = 'new';  // new | old | az
+  let sortMode = 'new';  // status | new | old | az | za
   let search = '';
   let liveCleanup = null;
   const MOD = /Mac/i.test(navigator.platform) ? '⌘' : 'Ctrl';
@@ -10,7 +10,7 @@ if (MODE === 'widget') (() => {
 
   // ---------- Hide: shrink the whole widget to a small floating logo. Click to restore, drag to move. ----------
   const bub = document.createElement('div'); bub.id = 'bub';
-  bub.innerHTML = `<button id="bubLogo" title="Show ${BRAND.name}" aria-label="Show ${BRAND.name}">${mark(BRAND.mark, 26)}</button>`;
+  bub.innerHTML = `<button id="bubLogo" title="Show ${BRAND.name}" aria-label="Show ${BRAND.name}">${mark(BRAND.mark, 40)}</button>`;
   document.body.appendChild(bub);
   function hide() { document.body.classList.add('bubble'); cue.win.bubble(true); }
   function restore() { document.body.classList.remove('bubble'); cue.win.bubble(false); }
@@ -61,11 +61,19 @@ if (MODE === 'widget') (() => {
 
   // ---------------- shell + header ----------------
   const shell = (inner, cls = '') => `<div class="shell ${cls}"><div class="hdr"><div class="brand">${brandHTML()}</div><span class="tier" title="Cloud engines"><i></i>Cloud</span>
-    <button class="ib" id="hCollapse" title="Hide">${ic('minimize-2', 16)}</button><button class="ib mv" title="Move (${MOD} + ⇧ + ✥)  ·  drag me, or use ${MOD}⇧ + arrow keys during a live session" style="-webkit-app-region:drag;cursor:grab">${ic('move', 16)}</button><button class="ib" id="hMenu" title="Menu">${ic('ellipsis-vertical', 16)}</button><button class="ib close" id="hClose" title="Close">${ic('x', 16)}</button></div>${inner}</div>`;
+    <button class="ib" id="hCollapse" title="Hide">${ic('minimize-2', 16)}</button><button class="ib" id="hMove" title="Move (${MOD} + ⇧ + ✥)">${ic('move', 16)}</button><button class="ib" id="hMenu" title="Menu">${ic('ellipsis-vertical', 16)}</button><button class="ib close" id="hClose" title="Close">${ic('x', 16)}</button></div>${inner}</div>`;
   function bindHeader() {
     $('#hCollapse').onclick = hide;
     $('#hClose').onclick = () => cue.win.close();
     $('#hMenu').onclick = (e) => kebab(e.currentTarget);
+    $('#hMove').onclick = (e) => zonePicker(e.currentTarget);
+  }
+  // Move: pick one of 6 screen positions (also ⌘/Ctrl + ⇧ + arrow keys)
+  async function zonePicker(anchor) {
+    const cur = await cue.win.zone();
+    popMenu(anchor, `<div class="it mute">Move to · or ${MOD} ⇧ + arrow keys</div><div class="zgrid">${[0, 1, 2, 3, 4, 5].map((z) => `<button class="zc ${z === cur ? 'on' : ''}" data-z="${z}" title="${['Top left', 'Top center', 'Top right', 'Bottom left', 'Bottom center', 'Bottom right'][z]}"><i></i></button>`).join('')}</div>`, (m, close) => {
+      m.onclick = (e) => { const b = e.target.closest('[data-z]'); if (!b) return; cue.win.zone(Number(b.dataset.z)); close(); };
+    });
   }
   function kebab(anchor) {
     popMenu(anchor, `<div class="it mute">${BRAND.name} ${BRAND.suffix} · local &amp; private</div><div class="sep"></div>
@@ -96,7 +104,7 @@ if (MODE === 'widget') (() => {
     const draw = () => {
       const q = search.toLowerCase();
       let rows = list.filter((s) => !q || [s.company, s.role, s.title, s.description].join(' ').toLowerCase().includes(q));
-      rows.sort((a, b) => (sortMode === 'new' ? b.createdAt - a.createdAt : sortMode === 'old' ? a.createdAt - b.createdAt : (a.company || a.title || '').localeCompare(b.company || b.title || '')));
+      rows = sortSessions(rows, sortMode);
       $('#cards').innerHTML = rows.length ? rows.map((s) => {
         const regular = s.type === 'regular'; const ended = s.status === 'ended';
         return `<div class="scard"><div class="date">${fmtDate(s.createdAt)}</div><div class="co">${esc(clean(regular ? s.title || 'Call' : s.company || s.title || 'Interview'))}</div><div class="rl">${esc(clean(regular ? s.description : s.role)) || '&nbsp;'}</div>
@@ -110,7 +118,7 @@ if (MODE === 'widget') (() => {
       <div class="footbar"><button class="btn ghost" id="toDash">View in Dashboard${ic('arrow-up-right', 15)}</button><button class="btn primary" id="create">${ic('plus', 16)}Create Session</button></div></div>`));
     bindHeader(); draw();
     $('#q').oninput = (e) => { search = e.target.value; draw(); };
-    $('#sort').onclick = () => { sortMode = { new: 'old', old: 'az', az: 'new' }[sortMode]; toast('Sorted: ' + { new: 'newest first', old: 'oldest first', az: 'A–Z' }[sortMode], 1200); draw(); };
+    $('#sort').onclick = (e) => sortMenu(e.currentTarget, sortMode, (v) => { sortMode = v; draw(); });
     $('#toDash').onclick = () => cue.win.openDashboard('sessions');
     $('#create').onclick = () => viewWizard();
     $('#cards').onclick = async (e) => {
@@ -231,7 +239,7 @@ if (MODE === 'widget') (() => {
     view(`<div class="live-root"><div class="lbar glass"><div class="dev"><span id="dMic" title="Microphone">${ic('mic', 15)}</span><span id="dSys" title="System audio">${ic('volume-2', 15)}</span></div>
       <button class="lbtn primary" id="bAns">${ic('sparkles', 15)}Answer<kbd>${MOD}↵</kbd></button><button class="lbtn" id="bShot">${ic('camera', 15)}Screenshot<kbd>${MOD}⇧↵</kbd></button><button class="lbtn" id="bChat">${ic('message-square-text', 15)}Chat<kbd>${MOD}⇧␣</kbd></button>
       ${s.type === 'mock' ? `<button class="lbtn" id="bNext">${ic('mic', 15)}Next question</button>` : ''}<div class="grow"></div>
-      <button class="lbtn sq mv" id="lMove" title="Move (${MOD} + ⇧ + ✥)  ·  drag me, or use ${MOD}⇧ + arrow keys" style="-webkit-app-region:drag;cursor:grab">${ic('move', 16)}</button><button class="lbtn sq" id="lCollapse" title="Hide">${ic('minimize-2', 16)}</button><button class="lbtn sq" id="lMenu" title="Menu">${ic('ellipsis-vertical', 16)}</button><button class="timer" id="timer" title="End session">0:00</button></div>
+      <button class="lbtn sq" id="lMove" title="Move (${MOD} + ⇧ + ✥)">${ic('move', 16)}</button><button class="lbtn sq" id="lCollapse" title="Hide">${ic('minimize-2', 16)}</button><button class="lbtn sq" id="lMenu" title="Menu">${ic('ellipsis-vertical', 16)}</button><button class="timer" id="timer" title="End session">0:00</button></div>
       <div class="lstat glass"><div class="wave idle" id="wave"><i></i><i></i><i></i><i></i></div><div class="txt" id="ltxt">Connecting…</div><button class="lbtn" id="bClearTx">${ic('eraser', 15)}Clear<kbd>${MOD}⇧⌫</kbd></button></div>
       <div class="apanel glass" id="panel" style="display:none"></div></div>`);
 
@@ -314,7 +322,7 @@ if (MODE === 'widget') (() => {
     const clearTx = () => { lines.length = 0; for (const k in interim) delete interim[k]; pendingQ = []; persist(); refreshLine(); };
 
     $('#bAns').onclick = () => ask({}); $('#bShot').onclick = shot; $('#bChat').onclick = openChat; $('#bClearTx').onclick = clearTx;
-    $('#lCollapse').onclick = hide;
+    $('#lCollapse').onclick = hide; $('#lMove').onclick = (e) => zonePicker(e.currentTarget);
     $('#lMenu').onclick = (e) => popMenu(e.currentTarget, `<div class="it" data-a="sum">${ic('book-open', 15)}<span class="grow">Summarize session</span></div><div class="it" data-a="dash">${ic('layout-grid', 15)}<span class="grow">Dashboard</span>${ic('arrow-up-right', 14)}</div><div class="it" data-a="screen">${ic('monitor', 15)}<span class="grow">Next Screen</span></div>
       <div class="it">${ic('eye', 15)}<span class="grow">Opacity</span><input type="range" min="40" max="100" value="100" id="op" style="width:90px"></div><div class="sep"></div><div class="it" data-a="end">${ic('power', 15)}<span class="grow">End session</span></div>`, (m, close) => {
       $('#op', m).oninput = (ev) => cue.win.opacity(ev.target.value / 100);

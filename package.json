@@ -1,13 +1,16 @@
 {
   "name": "cue",
-  "version": "0.4.0",
+  "version": "0.6.0",
   "description": "Cue AI \u2014 a self-hosted interview and meeting copilot (fast cloud mode on free tiers)",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder",
     "icons": "node tools/build-icons.js",
-    "test:smoke": "xvfb-run -a electron --no-sandbox tools/smoke.js"
+    "test:smoke": "xvfb-run -a electron --no-sandbox tools/smoke.js",
+    "mac": "electron-builder --mac dir",
+    "install-mac": "bash tools/install-mac.sh",
+    "icon": "xvfb-run -a electron --no-sandbox tools/render-icon.js || electron tools/render-icon.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.60.0",
@@ -22,14 +25,37 @@
     "lucide-static": "^1.52.0"
   },
   "build": {
-    "appId": "com.rakesh.cue",
-    "productName": "Cue",
+    "appId": "com.rakesh.cueai",
+    "productName": "Cue AI",
     "files": [
       "main.js",
       "preload.js",
       "cloud.js",
       "renderer/**/*",
       "package.json"
-    ]
+    ],
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "mac": {
+      "icon": "build/icon.png",
+      "category": "public.app-category.productivity",
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "identity": null,
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Cue AI listens to your microphone to transcribe the call.",
+        "NSScreenCaptureUsageDescription": "Cue AI captures system audio and screenshots during a session.",
+        "LSUIElement": false
+      }
+    },
+    "compression": "store"
   }
 }

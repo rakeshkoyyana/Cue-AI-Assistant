@@ -57,6 +57,20 @@ Ctrl/⌘+Enter Answer · Ctrl/⌘+Shift+Enter Screenshot · Ctrl/⌘+Shift+Space
 - Not included: Headshots, referrals/subscription, cloud accounts.
 - Build installers: `npm run dist`.
 
+## Install as a Mac app (Desktop icon)
+
+```
+npm install
+npm run install-mac
+```
+This builds **Cue AI.app** (Apple Silicon), installs it in /Applications, and puts a **Cue AI** shortcut on your Desktop. The window is shown only once fully drawn (~0.6 s in testing).
+
+## Window controls
+- **Move:** click the move icon to pick one of 6 screen positions (top/bottom × left/center/right), or press **⌘ ⇧ + arrow keys** anywhere while Cue is visible.
+- **Hide:** shrinks Cue to just its logo; click to restore, drag to reposition. A red dot means a session is running.
+- **All desktops:** Cue follows you across macOS Spaces (three-finger swipe) and over full-screen apps.
+- **⌘ ⇧ H** shows/hides Cue.
+
 ## Current setup (what to use today)
 
 | Job | Engine | Key from | Cost |

@@ -1,7 +1,7 @@
 // Headless smoke test: node_modules/.bin/electron tools/smoke.js  (use xvfb-run on Linux). Mocks Ollama on :11434.
 const { app, BrowserWindow } = require('electron'); const fs = require('fs'); const http = require('http'); const path = require('path');
 const OUT = process.env.OUT || '/tmp/shots'; fs.mkdirSync(OUT, { recursive: true });
-app.setPath('userData', fs.mkdtempSync('/tmp/cue-test-'));
+process.env.CUE_TEST = '1'; app.setPath('userData', fs.mkdtempSync('/tmp/cue-test-'));
 process.env.CUE_GROQ_URL = 'http://127.0.0.1:11434';
 process.env.CUE_OPENAI_URL = process.env.CUE_GEMINI_URL = 'http://127.0.0.1:11434/openai/v1';
 require('../main.js');
@@ -48,6 +48,13 @@ app.whenReady().then(async () => {
     })()`);
     await js('location.reload()'); await sleep(900);
     await shot(w, '02-list');
+    await click('#sort'); await sleep(300); await shot(w, '02b-sort-menu');
+    await js(`document.querySelector('.menu [data-s=za]').click()`); await sleep(200);
+    console.log('sorted Z-A:', await js(`[...document.querySelectorAll('.scard .co')].map(e=>e.textContent).join(' | ')`));
+    await click('#hMove'); await sleep(300); await shot(w, '02c-move-picker');
+    const zs = []; for (const z of [0, 2, 4, 3, 5]) { await js(`cue.win.zone(${z})`); await sleep(250); zs.push(z + ':' + w.getBounds().x + ',' + w.getBounds().y + '→zone ' + (await js('cue.win.zone()'))); }
+    console.log('zones:', zs.join('  '), 'screen', JSON.stringify(require('electron').screen.getPrimaryDisplay().workArea));
+    await js(`document.body.click()`);
     await click('#create'); await sleep(700); await shot(w, '03-wizard1');
     await js(`document.querySelector('#company').value='Acme';document.querySelector('#company').dispatchEvent(new Event('input'))`);
     await click('#resumeBtn'); await sleep(400); await shot(w, '04-picker');

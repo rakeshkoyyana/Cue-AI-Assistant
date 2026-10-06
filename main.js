@@ -5,6 +5,12 @@ const fs = require('fs');
 const crypto = require('crypto');
 const os = require('os');
 
+// One data folder for both `npm start` and the packaged "Cue AI.app" (copies the old dev folder once).
+if (!process.env.CUE_TEST) {
+  const target = path.join(app.getPath('appData'), 'Cue AI'), old = path.join(app.getPath('appData'), 'cue');
+  try { if (!fs.existsSync(target) && fs.existsSync(old)) fs.cpSync(old, target, { recursive: true }); } catch {}
+  app.setPath('userData', target);
+}
 let widget, dash;
 let collapsed = null; // previous size when collapsed
 const DB_PATH = () => path.join(app.getPath('userData'), 'cue-data.json');
@@ -21,7 +27,7 @@ const defaults = {
 
 // ---------- storage ----------
 const enc = (v) => (!v ? '' : safeStorage.isEncryptionAvailable() ? 'enc:' + safeStorage.encryptString(v).toString('base64') : 'raw:' + v);
-const dec = (v) => (!v ? '' : v.startsWith('enc:') ? safeStorage.decryptString(Buffer.from(v.slice(4), 'base64')) : v.startsWith('raw:') ? v.slice(4) : v);
+const dec = (v) => { try { return !v ? '' : v.startsWith('enc:') ? safeStorage.decryptString(Buffer.from(v.slice(4), 'base64')) : v.startsWith('raw:') ? v.slice(4) : v; } catch { return ''; } }; // a key from another build that can't be decrypted just needs re-entering
 function load() {
   try {
     const d = JSON.parse(fs.readFileSync(DB_PATH(), 'utf8')); const st = { ...defaults.settings, ...d.settings };
@@ -266,14 +272,15 @@ function registerIpc() {
   });
 
   // window control
-  ipcMain.handle('win:size', (e, w, h) => { const win = winOf(e); collapsed = null; win.setResizable(true); win.setSize(Math.round(w), Math.round(h), true); });
+  ipcMain.handle('win:size', (e, w, h) => { const win = winOf(e); collapsed = null; win.setResizable(true); win.setSize(Math.round(w), Math.round(h), false); if (win === widget) { const p = zonePos(win, zone); win.setPosition(p.x, p.y, false); } keepOnScreen(win); });
+  ipcMain.handle('win:zone', (e, z) => { const win = winOf(e); if (typeof z === 'number') toZone(win, z); return zoneOf(win); });
   ipcMain.handle('win:collapse', (e) => { const win = winOf(e); if (collapsed) { win.setSize(...collapsed, true); collapsed = null; } else { collapsed = win.getSize(); win.setSize(collapsed[0], 72, true); } return !!collapsed; });
   // Hide: shrink the widget to a small floating bubble (and back), keeping its position
   let prevBounds = null; const BUBBLE = 52;
   ipcMain.handle('win:bubble', (e, on) => {
     const win = winOf(e);
-    if (on) { prevBounds = win.getBounds(); win.setMinimumSize(1, 1); win.setResizable(false); win.setBounds({ x: prevBounds.x + prevBounds.width - BUBBLE - 8, y: prevBounds.y + 8, width: BUBBLE, height: BUBBLE }, false); win.setOpacity(1); }
-    else if (prevBounds) { const b = win.getBounds(); win.setResizable(true); win.setMinimumSize(380, 72); win.setBounds({ ...prevBounds, x: Math.max(0, b.x + BUBBLE + 8 - prevBounds.width), y: Math.max(0, b.y - 8) }, false); prevBounds = null; }
+    if (on) { prevBounds = win.getBounds(); win.setHasShadow(false); win.setMinimumSize(1, 1); win.setResizable(false); win.setBounds({ x: prevBounds.x + prevBounds.width - BUBBLE - 8, y: prevBounds.y + 8, width: BUBBLE, height: BUBBLE }, false); win.setOpacity(1); }
+    else if (prevBounds) { const b = win.getBounds(); win.setHasShadow(true); win.setResizable(true); win.setMinimumSize(380, 72); win.setBounds({ ...prevBounds, x: Math.max(0, b.x + BUBBLE + 8 - prevBounds.width), y: Math.max(0, b.y - 8) }, false); prevBounds = null; keepOnScreen(win); }
   });
   ipcMain.handle('win:moveBy', (e, dx, dy) => { const w = winOf(e); const [x, y] = w.getPosition(); w.setPosition(Math.round(x + dx), Math.round(y + dy)); });
   ipcMain.handle('win:nextScreen', (e) => {
@@ -288,19 +295,29 @@ function registerIpc() {
   ipcMain.handle('hotkeys:live', (_e, on) => setLiveHotkeys(on));
 }
 
+// ---------- 6-zone positioning (3 columns × 2 rows of the current screen) ----------
+// Zones: 0 top-left · 1 top-center · 2 top-right · 3 bottom-left · 4 bottom-center · 5 bottom-right
+let zone = 2; const MARGIN = 16;
+function zonePos(win, z) {
+  const b = win.getBounds(); const d = screen.getDisplayMatching(b).workArea; const col = z % 3, row = Math.floor(z / 3);
+  const x = col === 0 ? d.x + MARGIN : col === 1 ? d.x + Math.round((d.width - b.width) / 2) : d.x + d.width - b.width - MARGIN;
+  const y = row === 0 ? d.y + MARGIN : Math.max(d.y + MARGIN, d.y + d.height - b.height - MARGIN);
+  return { x, y };
+}
+function zoneOf(win) { const b = win.getBounds(); const d = screen.getDisplayMatching(b).workArea; const cx = b.x + b.width / 2 - d.x, cy = b.y + b.height / 2 - d.y; return (cy < d.height / 2 ? 0 : 3) + Math.max(0, Math.min(2, Math.floor(cx / (d.width / 3)))); }
+function toZone(win, z) { if (!win || win.isDestroyed()) return; zone = z; const p = zonePos(win, z); win.setPosition(p.x, p.y, true); }
+function stepZone(dx, dy) { if (!widget) return; const z = zoneOf(widget); let col = z % 3, row = Math.floor(z / 3); col = Math.max(0, Math.min(2, col + dx)); row = Math.max(0, Math.min(1, row + dy)); toZone(widget, row * 3 + col); }
+function keepOnScreen(win) { const b = win.getBounds(); const d = screen.getDisplayMatching(b).workArea; const x = Math.min(Math.max(b.x, d.x), d.x + d.width - b.width), y = Math.min(Math.max(b.y, d.y), d.y + d.height - b.height); if (x !== b.x || y !== b.y) win.setPosition(x, y); }
+
 // ---------- hotkeys ----------
-const MOVE_STEP = 40;
 const MOVE_KEYS = { 'CommandOrControl+Shift+Left': [-1, 0], 'CommandOrControl+Shift+Right': [1, 0], 'CommandOrControl+Shift+Up': [0, -1], 'CommandOrControl+Shift+Down': [0, 1] };
+// Move (⌘ + ⇧ + arrows) works whenever the widget is visible — not only during a live session.
+function setMoveKeys(on) { for (const [acc, [dx, dy]] of Object.entries(MOVE_KEYS)) { if (globalShortcut.isRegistered(acc)) globalShortcut.unregister(acc); if (on) globalShortcut.register(acc, () => stepZone(dx, dy)); } }
 const LIVE_KEYS = { 'CommandOrControl+Return': 'answer', 'CommandOrControl+Shift+Return': 'screenshot', 'CommandOrControl+Shift+Space': 'chat', 'CommandOrControl+Shift+Backspace': 'clear' };
 function setLiveHotkeys(on) {
   for (const [acc, name] of Object.entries(LIVE_KEYS)) {
     if (globalShortcut.isRegistered(acc)) globalShortcut.unregister(acc);
     if (on) globalShortcut.register(acc, () => send(widget, 'hotkey', name));
-  }
-  // Move (⌘ + ⇧ + arrows): nudge the overlay without touching the mouse
-  for (const [acc, [dx, dy]] of Object.entries(MOVE_KEYS)) {
-    if (globalShortcut.isRegistered(acc)) globalShortcut.unregister(acc);
-    if (on) globalShortcut.register(acc, () => { if (!widget) return; const [x, y] = widget.getPosition(); widget.setPosition(x + dx * MOVE_STEP, y + dy * MOVE_STEP); });
   }
 }
 
@@ -308,18 +325,23 @@ function setLiveHotkeys(on) {
 function createWidget() {
   const z = getSettings(false).zoom || 1;
   widget = new BrowserWindow({
-    width: 460, height: 720, minWidth: 380, minHeight: 72, frame: false, transparent: true, hasShadow: true, alwaysOnTop: true, title: 'Cue',
-    backgroundColor: '#00000000',
+    width: 460, height: 720, minWidth: 380, minHeight: 72, frame: false, transparent: true, hasShadow: true, alwaysOnTop: true, title: 'Cue AI',
+    backgroundColor: '#00000000', show: false, // shown on 'ready-to-show' so it appears fully drawn, with no blank flash
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
   });
   widget.setAlwaysOnTop(true, 'floating');
+  // follow you across macOS desktops (Spaces, three-finger swipe) and over full-screen apps
+  if (process.platform === 'darwin') widget.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  widget.once('ready-to-show', () => { const p = zonePos(widget, zone); widget.setPosition(p.x, p.y); widget.show(); if (process.env.CUE_TIMING) console.log(`[cue] window shown ${Math.round(performance.now())} ms after start`); });
+  widget.on('show', () => setMoveKeys(true)); widget.on('hide', () => setMoveKeys(false));
   widget.loadFile(path.join(__dirname, 'renderer', 'index.html'), { query: { mode: 'widget' } });
   widget.webContents.on('did-finish-load', () => widget.webContents.setZoomFactor(z));
   widget.on('closed', () => app.quit());
 }
 function openDashboard(hash) {
   if (dash && !dash.isDestroyed()) { dash.show(); dash.focus(); if (hash) send(dash, 'dash-nav', hash); return; }
-  dash = new BrowserWindow({ width: 1280, height: 820, minWidth: 900, minHeight: 600, title: 'Cue Dashboard', backgroundColor: '#0b0c0f', webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false } });
+  dash = new BrowserWindow({ width: 1280, height: 820, minWidth: 900, minHeight: 600, title: 'Cue AI Dashboard', backgroundColor: '#0b0c0f', show: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false } });
+  dash.once('ready-to-show', () => dash.show());
   dash.loadFile(path.join(__dirname, 'renderer', 'index.html'), { query: { mode: 'dashboard', page: hash || 'sessions' } });
 }
 
@@ -333,6 +355,7 @@ app.whenReady().then(() => {
   registerIpc();
   createWidget();
   globalShortcut.register('CommandOrControl+Shift+H', () => widget && (widget.isVisible() ? widget.hide() : widget.show()));
+  setMoveKeys(true);
 });
 app.on('will-quit', () => { globalShortcut.unregisterAll(); ai.ocrStop(); });
 app.on('window-all-closed', () => app.quit());

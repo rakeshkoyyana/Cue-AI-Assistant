@@ -32,6 +32,24 @@ function popMenu(anchor, html, onMount) {
   onMount(m, () => { m.remove(); document.removeEventListener('mousedown', off, true); });
 }
 
+// Sorting shared by the widget and the dashboard
+const SORTS = [['status', 'Status'], ['new', 'Newest first'], ['old', 'Oldest first'], ['az', 'Title A–Z'], ['za', 'Title Z–A']];
+const STATUS_RANK = { live: 0, ready: 1, ended: 2 };
+const titleOf = (x) => clean(x.company || x.title || x.name || '').toLowerCase();
+function sortRows(rows, mode, dateOf = (x) => x.createdAt || x.addedAt || 0) {
+  const r = [...rows];
+  if (mode === 'status') return r.sort((a, b) => (STATUS_RANK[a.status] ?? 1) - (STATUS_RANK[b.status] ?? 1) || dateOf(b) - dateOf(a));
+  if (mode === 'old') return r.sort((a, b) => dateOf(a) - dateOf(b));
+  if (mode === 'az') return r.sort((a, b) => titleOf(a).localeCompare(titleOf(b)));
+  if (mode === 'za') return r.sort((a, b) => titleOf(b).localeCompare(titleOf(a)));
+  return r.sort((a, b) => dateOf(b) - dateOf(a));
+}
+const sortSessions = (rows, mode) => sortRows(rows, mode);
+function sortMenu(anchor, cur, onPick, options = SORTS) {
+  popMenu(anchor, `<div class="it mute">Sort by</div>${options.map(([v, l]) => `<div class="it" data-s="${v}"><span class="grow">${l}</span>${v === cur ? ic('check', 15) : ''}</div>`).join('')}`, (m, close) => {
+    m.onclick = (e) => { const it = e.target.closest('[data-s]'); if (!it) return; close(); onPick(it.dataset.s); };
+  });
+}
 const LANGS = { en: 'English', es: 'Spanish', fr: 'French', de: 'German', hi: 'Hindi', pt: 'Portuguese', it: 'Italian', nl: 'Dutch', ja: 'Japanese', ko: 'Korean', zh: 'Chinese', ru: 'Russian' };
 // Free local AI is always first; cloud models only appear once an API key has been added (optional, future scope).
 // Answer models by provider. A provider's models are selectable once its key is added in Settings.

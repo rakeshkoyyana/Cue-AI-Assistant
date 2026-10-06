@@ -8,13 +8,12 @@ const os = require('os');
 let widget, dash;
 let collapsed = null; // previous size when collapsed
 const DB_PATH = () => path.join(app.getPath('userData'), 'cue-data.json');
-const SECRET_KEYS = ['groqKey', 'anthropicKey', 'deepgramKey'];
+const SECRET_KEYS = ['openaiKey', 'geminiKey', 'anthropicKey', 'groqKey', 'deepgramKey'];
 
 const defaults = {
   settings: {
-    // Fast cloud mode: Groq (free tier) for answers + Whisper transcription. Deepgram and Anthropic are optional upgrades.
-    v: 4, provider: 'groq', groqKey: '', groqModel: 'openai/gpt-oss-120b', stt: 'groq',
-    anthropicKey: '', anthropicModel: 'claude-sonnet-5-5', deepgramKey: '', language: 'en', theme: 'dark', zoom: 1,
+    // Cloud engines. Answers: OpenAI / Google Gemini / Anthropic / Groq (free). Live captions: Deepgram (falls back to Groq Whisper).
+    v: 5, defaultModel: '', openaiKey: '', geminiKey: '', anthropicKey: '', groqKey: '', deepgramKey: '', language: 'en', theme: 'dark', zoom: 1,
   },
   sessions: [],
   documents: [],
@@ -26,7 +25,8 @@ const dec = (v) => (!v ? '' : v.startsWith('enc:') ? safeStorage.decryptString(B
 function load() {
   try {
     const d = JSON.parse(fs.readFileSync(DB_PATH(), 'utf8')); const st = { ...defaults.settings, ...d.settings };
-    if (!st.v || st.v < 4) { st.v = 4; st.provider = 'groq'; if (st.stt !== 'deepgram') st.stt = 'groq'; for (const k of ['ollamaUrl', 'ollamaModel', 'sttQuality']) delete st[k]; } // v0.4: fast cloud mode
+    if (st.v === 4) { st.v = 5; if (!st.defaultModel && st.groqModel) st.defaultModel = 'groq:' + st.groqModel; }
+    if (!st.v || st.v < 4) { st.v = 5; for (const k of ['ollamaUrl', 'ollamaModel', 'sttQuality']) delete st[k]; } // v0.4+: cloud engines
     return { ...defaults, ...d, settings: st };
   }
   catch { return JSON.parse(JSON.stringify(defaults)); }
@@ -72,7 +72,7 @@ function readFolder(root) {
 // compact=true keeps the prompt to ~3–4k tokens so it fits Groq's free-tier per-minute token limits and starts answering instantly.
 function buildSystem(s, db, compact = false) {
   const local = compact;
-  const cap = (t, n) => (local && t.length > n ? t.slice(0, n) + '\n…[trimmed]' : t);
+  const cap = (t, n) => (t.length > n ? t.slice(0, n) + '\n…[trimmed]' : t); // standard budget keeps answers fast and cheap on every engine
   const resume = db.documents.find((d) => d.id === s.resumeId);
   const docs = db.documents.filter((d) => (s.docIds || []).includes(d.id));
   const p = { style: 'concise', format: 'speakable', code: true, ...(s.prefs || {}) };
@@ -83,30 +83,38 @@ function buildSystem(s, db, compact = false) {
     ? `You are Cue, a private real-time call copilot. You see a live transcript of a work call and help the user respond accurately and relevantly. When a project folder is provided, ground answers in the actual files and cite paths. If something is not in the provided context, say so instead of guessing. ${style} ${format} ${code}`
     : `You are Cue, a private real-time interview copilot. You see a live transcript of an interview. Write answers in the candidate's first-person voice, grounded in their real resume and the job description. Never invent employers, titles or metrics that are not in the resume; if the resume lacks something, give a truthful bridging answer. ${style} ${format} ${code}`;
   sys += `\n\n# Session\nTitle: ${s.title || ''}\nCompany: ${s.company || ''}\nRole: ${s.role || ''}\nLanguage: ${s.language || 'en'}`;
-  if (s.jobDescription) sys += `\n\n# Job description\n${cap(s.jobDescription, 3000)}`;
+  if (s.jobDescription) sys += `\n\n# Job description\n${cap(s.jobDescription, local ? 3000 : 8000)}`;
   if (s.description) sys += `\n\n# Call description\n${s.description}`;
   if (s.notes) sys += `\n\n# Extra instructions from the user\n${s.notes}`;
-  if (resume) sys += `\n\n# Resume (${resume.name})\n${resume.text.slice(0, local ? 5000 : 30000)}`;
-  for (const d of docs.slice(0, local ? 3 : 99)) sys += `\n\n# Document: ${d.name}\n${d.text.slice(0, local ? 2000 : 30000)}`;
+  if (resume) sys += `\n\n# Resume (${resume.name})\n${resume.text.slice(0, local ? 5000 : 15000)}`;
+  for (const d of docs.slice(0, local ? 3 : 4)) sys += `\n\n# Document: ${d.name}\n${d.text.slice(0, local ? 2000 : 8000)}`;
   if (s.folderPath && fs.existsSync(s.folderPath)) {
     let files = readFolder(s.folderPath).files;
-    if (local) { // smallest + most descriptive files first, ~10 KB total
+    { // smallest + most descriptive files first (~8 KB for Groq, ~40 KB otherwise)
+      const budget = local ? 8000 : 40000, per = local ? 2500 : 8000;
       const rank = (f) => (/readme|package\.json|requirements|pyproject/i.test(f.rel) ? -1 : 0); files = files.sort((a, b) => rank(a) - rank(b) || a.text.length - b.text.length);
-      let used = 0; files = files.filter((f) => (used + Math.min(f.text.length, 2500) <= 8000 ? ((used += Math.min(f.text.length, 2500)), true) : false)).map((f) => ({ ...f, text: f.text.slice(0, 2500) }));
+      let used = 0; files = files.filter((f) => (used + Math.min(f.text.length, per) <= budget ? ((used += Math.min(f.text.length, per)), true) : false)).map((f) => ({ ...f, text: f.text.slice(0, per) }));
     }
-    sys += `\n\n# Project folder: ${s.folderPath}${local ? ' (trimmed excerpt)' : ''}\n` + files.map((f) => `\n--- ${f.rel} ---\n${f.text}`).join('\n');
+    sys += `\n\n# Project folder: ${s.folderPath} (excerpt)\n` + files.map((f) => `\n--- ${f.rel} ---\n${f.text}`).join('\n');
   }
   return sys;
 }
 
 // ---------- LLM ----------
 const aborts = new Map();
+const KEY_OF = { openai: 'openaiKey', gemini: 'geminiKey', anthropic: 'anthropicKey', groq: 'groqKey' };
+const DEFAULT_OF = { openai: 'gpt-5.6-luna', gemini: 'gemini-3.5-flash-lite', anthropic: 'claude-haiku-4-5-20251001', groq: 'openai/gpt-oss-120b' };
+// "provider:model" → the engine to use. If that provider has no key, use the first provider that does.
 function resolveModel(model) {
   const st = getSettings(false);
-  if (model && model.startsWith('anthropic:') && st.anthropicKey) return { provider: 'anthropic', name: model.slice(10) };
-  if (!model && st.provider === 'anthropic' && st.anthropicKey) return { provider: 'anthropic', name: st.anthropicModel };
-  // everything else (including old local-model sessions) runs on Groq
-  return { provider: 'groq', name: model && model.startsWith('groq:') ? model.slice(5) : st.groqModel };
+  let [p, ...rest] = String(model || st.defaultModel || '').split(':'); let name = rest.join(':');
+  if (!KEY_OF[p] || !st[KEY_OF[p]]) {
+    const avail = ['openai', 'gemini', 'anthropic', 'groq'].find((x) => st[KEY_OF[x]]);
+    if (!avail) throw new Error('Add an AI key in Settings (⋮ menu) — OpenAI, Google Gemini, Anthropic, or free Groq.');
+    const [dp, ...dr] = String(st.defaultModel || '').split(':');
+    if (dp === avail && dr.length) { p = dp; name = dr.join(':'); } else { p = avail; name = DEFAULT_OF[avail]; }
+  }
+  return { provider: p, name: name || DEFAULT_OF[p] };
 }
 async function streamLLM({ system, messages, image, reqId, onText, onStats, model }) {
   const tStart = Date.now(); let tFirst = 0; const mark = (t) => { if (!tFirst && t) tFirst = Date.now(); onText(t); };
@@ -114,21 +122,22 @@ async function streamLLM({ system, messages, image, reqId, onText, onStats, mode
   const ctrl = new AbortController(); aborts.set(reqId, ctrl);
   try {
     if (m.provider === 'anthropic') {
-      if (!st.anthropicKey) throw new Error('Add your Anthropic API key in Settings (⋮ menu).');
       const Anthropic = require('@anthropic-ai/sdk');
       const client = new Anthropic({ apiKey: st.anthropicKey });
       const msgs = messages.map((x, i) => image && i === messages.length - 1 && x.role === 'user'
         ? { role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: image } }, { type: 'text', text: x.content }] } : x);
       const stream = client.messages.stream({ model: m.name, max_tokens: 2048, system, messages: msgs }, { signal: ctrl.signal });
       stream.on('text', mark);
-      await stream.finalMessage();
+      const fin = await stream.finalMessage();
+      onStats && onStats({ model: m.name, ttft: tFirst ? tFirst - tStart : null, promptTokens: fin.usage?.input_tokens || null, tps: tFirst ? Math.round((fin.usage?.output_tokens || 0) / Math.max(0.05, (Date.now() - tFirst) / 1000)) : null });
     } else {
-      if (!st.groqKey) throw new Error('Add your free Groq key in Setup (⋮ menu) to get answers.');
-      if (image) { // Groq's fast text models can't see images: read the screenshot with local OCR and send the text
+      let img = image;
+      if (image && m.provider === 'groq') { // Groq's fast text models can't see images: read the screenshot with local OCR and send the text
         const text = await ai.ocr(image, path.join(app.getPath('userData'), 'ocr')).catch((e) => { throw new Error('Screenshot text recognition failed (' + e.message + ').'); });
-        messages = messages.map((x, i) => (i === messages.length - 1 ? { ...x, content: x.content + `\n\n# Text read from my screen (OCR, may contain errors)\n${text || '(nothing readable)'}` } : x));
+        messages = messages.map((x, i) => (i === messages.length - 1 ? { ...x, content: x.content + `\n\n# Text read from my screen (OCR, may contain errors)\n${text || '(nothing readable)'}` } : x)); img = null;
       }
-      const stats = await ai.groqChatWithFallback({ key: st.groqKey, model: m.name, system, messages, signal: ctrl.signal, onText: mark });
+      const opts = { provider: m.provider, key: st[KEY_OF[m.provider]], model: m.name, system, messages, image: img, signal: ctrl.signal, onText: mark };
+      const stats = m.provider === 'groq' ? await ai.groqChatWithFallback(opts) : await ai.chatStream(opts);
       onStats && onStats({ ...stats, ttft: tFirst ? tFirst - tStart : stats.ttft });
     }
   } finally { aborts.delete(reqId); }
@@ -156,17 +165,17 @@ function registerIpc() {
   ipcMain.handle('deepgram:key', () => getSettings(false).deepgramKey);
 
   // ---- cloud engines: status, key checks, speech-to-text ----
-  ipcMain.handle('setup:status', () => { const st = getSettings(false); return { groq: !!st.groqKey, deepgram: !!st.deepgramKey, anthropic: !!st.anthropicKey, sttEngine: st.stt === 'deepgram' && st.deepgramKey ? 'deepgram' : 'groq', groqModel: st.groqModel, models: ai.GROQ_MODELS }; });
-  ipcMain.handle('setup:test', (_e, which) => { const st = getSettings(false); return which === 'deepgram' ? ai.testDeepgram(st.deepgramKey) : ai.testGroq(st.groqKey); });
-  ipcMain.handle('stt:transcribe', (_e, samples, lang) => { const st = getSettings(false); if (!st.groqKey) throw new Error('Add your free Groq key in Setup'); return ai.groqTranscribe(st.groqKey, samples, lang); });
-  ipcMain.handle('app:openExternal', (_e, url) => { if (/^https:\/\/(console\.groq\.com|console\.deepgram\.com|console\.anthropic\.com)\//.test(url)) shell.openExternal(url); });
+  ipcMain.handle('setup:status', () => { const st = getSettings(false); let def = null; try { def = resolveModel(); } catch {} return { keys: { openai: !!st.openaiKey, gemini: !!st.geminiKey, anthropic: !!st.anthropicKey, groq: !!st.groqKey, deepgram: !!st.deepgramKey }, answer: def, captions: st.deepgramKey ? 'deepgram' : st.groqKey ? 'groq' : null }; });
+  ipcMain.handle('setup:test', (_e, which) => { const st = getSettings(false); return ai.testKey(which, st[which === 'deepgram' ? 'deepgramKey' : KEY_OF[which]]); });
+  ipcMain.handle('stt:transcribe', (_e, samples, lang) => { const st = getSettings(false); if (!st.groqKey) throw new Error('Add a Deepgram key (live captions) or a free Groq key in Settings'); return ai.groqTranscribe(st.groqKey, samples, lang); });
+  ipcMain.handle('app:openExternal', (_e, url) => { if (/^https:\/\/(console\.groq\.com|console\.deepgram\.com|console\.anthropic\.com|platform\.openai\.com|aistudio\.google\.com)\//.test(url)) shell.openExternal(url); });
 
   ipcMain.handle('sessions:list', () => load().sessions.map(({ transcript, messages, ...r }) => ({ ...r, lines: (transcript || []).length, answers: Math.floor((messages || []).length / 2) })).sort((a, b) => b.createdAt - a.createdAt));
   ipcMain.handle('sessions:get', (_e, sid) => load().sessions.find((s) => s.id === sid));
   ipcMain.handle('sessions:create', (_e, data) => {
     const db = load(); const st = db.settings;
     const s = { id: id(), type: 'interview', title: '', company: '', role: '', description: '', jobDescription: '', notes: '', resumeId: null, docIds: [], folderPath: '',
-      language: st.language || 'en', model: 'groq:openai/gpt-oss-120b', prefs: { style: 'concise', format: 'speakable', code: true }, autoGenerate: false, saveTranscript: true,
+      language: st.language || 'en', model: '', prefs: { style: 'concise', format: 'speakable', code: true }, autoGenerate: false, saveTranscript: true,
       status: 'ready', usageMs: 0, transcript: [], messages: [], summary: '', createdAt: Date.now(), ...data };
     db.sessions.push(s); save(db); return s;
   });
@@ -207,7 +216,7 @@ function registerIpc() {
     const sender = e.sender; const w = BrowserWindow.fromWebContents(sender);
     const db = load(); const s = db.sessions.find((x) => x.id === sessionId); if (!s) throw new Error('Session not found');
     const reqId = id();
-    const local = resolveModel(s.model).provider !== 'anthropic'; // compact prompts for Groq's free tier
+    const local = resolveModel(s.model).provider === 'groq'; // compact prompts only for Groq's tight free-tier token limits
     const tx = (transcript || []).slice(local ? -16 : -60).map((l) => `${l.speaker}: ${l.text}`).join('\n').slice(local ? -2500 : -20000);
     const q = (question && question.trim()) || (image ? 'Analyze this screenshot and help me answer or solve what it shows.' : 'Based on the latest part of the conversation, what should I say next?');
     const content = `# Live transcript (most recent)\n${tx || '(no transcript yet)'}\n\n# Request\n${q}`;

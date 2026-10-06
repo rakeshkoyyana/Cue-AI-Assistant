@@ -11,7 +11,7 @@ if (MODE === 'dashboard') (() => {
   function frame(title, sub, body, action = '') {
     app.innerHTML = `<div class="dash view"><aside class="sb"><div class="brand">${brandHTML()}</div><button class="btn primary" id="newSess">${ic('plus', 16)}Create Session</button>
       <div class="grp">Call Assistant</div><div class="nav">${NAV.map(link).join('')}</div><div class="grp">Prepare</div><div class="nav">${PREP.map(link).join('')}</div>
-      <div class="foot"><b>${ic('zap', 15)}Fast cloud mode</b>Answers and transcription run on Groq's free tier. Sessions, resumes and documents stay on this computer.<div class="gap"></div><button class="btn ghost sm" id="gear">${ic('settings', 14)}Setup &amp; Settings</button></div></aside>
+      <div class="foot"><b>${ic('zap', 15)}Cloud engines</b>Answers via OpenAI, Gemini, Claude or Groq; live captions via Deepgram. Sessions, resumes and documents stay on this computer.<div class="gap"></div><button class="btn ghost sm" id="gear">${ic('settings', 14)}Setup &amp; Settings</button></div></aside>
       <section class="mainc"><div class="pagehd"><div class="grow"><h1>${title}</h1><p>${sub}</p></div>${action}</div><div class="pagebd" id="bd">${body}</div></section></div>`;
     $$('.nav a').forEach((a) => (a.onclick = () => { page = a.dataset.p; st.tab = 'all'; st.q = ''; render(); }));
     $('#newSess').onclick = () => cue.win.startSession('__new');
@@ -141,7 +141,7 @@ if (MODE === 'dashboard') (() => {
   // ---------------- settings modal ----------------
   async function settingsModal() {
     const S = await cue.settings.get();
-    modal(`<div class="row"><b class="grow" style="font-size:17px;letter-spacing:-.02em">Setup &amp; Settings</b><button class="ib" data-x>${ic('x', 16)}</button></div><p class="mute" style="margin:4px 0 14px">Fast cloud mode: answers and transcription run on Groq's free tier.</p>${settingsFormHTML(S)}
+    modal(`<div class="row"><b class="grow" style="font-size:17px;letter-spacing:-.02em">Setup &amp; Settings</b><button class="ib" data-x>${ic('x', 16)}</button></div><p class="mute" style="margin:4px 0 14px">Pick your AI engines.</p>${settingsFormHTML(S)}
       <div class="row" style="margin-top:16px;justify-content:flex-end"><button class="btn primary" id="save">Save</button></div>`, (b, close) => {
       $('[data-x]', b).onclick = close; const saveForm = bindSettingsForm(b, S);
       $('#save', b).onclick = async () => { await saveForm(); toast('Saved'); close(); };

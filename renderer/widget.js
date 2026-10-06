@@ -60,7 +60,7 @@ if (MODE === 'widget') (() => {
   cue.onGotoLive((sid) => (sid === '__new' ? viewWizard() : viewConnect(sid)));
 
   // ---------------- shell + header ----------------
-  const shell = (inner, cls = '') => `<div class="shell ${cls}"><div class="hdr"><div class="brand">${brandHTML()}</div><span class="tier" title="Fast cloud mode on free tiers"><i></i>Free · Cloud</span>
+  const shell = (inner, cls = '') => `<div class="shell ${cls}"><div class="hdr"><div class="brand">${brandHTML()}</div><span class="tier" title="Cloud engines"><i></i>Cloud</span>
     <button class="ib" id="hCollapse" title="Hide">${ic('minimize-2', 16)}</button><button class="ib mv" title="Move (${MOD} + ⇧ + ✥)  ·  drag me, or use ${MOD}⇧ + arrow keys during a live session" style="-webkit-app-region:drag;cursor:grab">${ic('move', 16)}</button><button class="ib" id="hMenu" title="Menu">${ic('ellipsis-vertical', 16)}</button><button class="ib close" id="hClose" title="Close">${ic('x', 16)}</button></div>${inner}</div>`;
   function bindHeader() {
     $('#hCollapse').onclick = hide;
@@ -123,7 +123,7 @@ if (MODE === 'widget') (() => {
 
   // ---------------- create-session wizard ----------------
   let draft = null;
-  const freshDraft = (type = 'interview') => ({ type, company: '', role: '', jobDescription: '', title: '', description: '', resumeId: '', docIds: [], folderPath: '', language: S.language || 'en', model: S.groqModel ? 'groq:' + S.groqModel : DEFAULT_MODEL,
+  const freshDraft = (type = 'interview') => ({ type, company: '', role: '', jobDescription: '', title: '', description: '', resumeId: '', docIds: [], folderPath: '', language: S.language || 'en', model: '',
     prefs: { style: 'concise', format: 'speakable', code: true }, notes: '', autoGenerate: false, saveTranscript: true });
 
   async function viewWizard(step = 1) {
@@ -151,7 +151,7 @@ if (MODE === 'widget') (() => {
       const pi = (n) => `<span class="pi">${ic(n, 16)}</span>`;
       main = `<div class="sechd" style="margin-top:2px">Session</div>
         <div class="prow">${pi('globe')}<div class="grow"><div class="t">Language</div><div class="s">Language spoken on the call</div></div><select id="lang">${Object.entries(LANGS).map(([k, v]) => `<option value="${k}" ${draft.language === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
-        <div class="prow">${pi('cpu')}<div class="grow"><div class="t">AI model</div><div class="s">Speed and accuracy</div></div><select id="model">${modelList(S).map((m) => `<option value="${m.id}" ${draft.model === m.id ? 'selected' : ''}>${m.label}</option>`).join('')}</select></div>
+        <div class="prow">${pi('cpu')}<div class="grow"><div class="t">AI model</div><div class="s">Speed and accuracy</div></div><select id="model" style="max-width:220px">${modelOptions(S, draft.model)}</select></div>
         <div class="prow">${pi('settings')}<div class="grow"><div class="t">Answer preferences</div><div class="s">Style and format</div></div><button class="btn ghost sm" id="cfg">Configure</button></div>
         <div class="prow">${pi('sparkles')}<div class="grow"><div class="t">AI instructions</div><div class="s">Additional guidance</div></div><button class="btn ghost sm" id="ins">Edit</button></div>
         <div class="sechd">Extra</div>
@@ -209,10 +209,10 @@ if (MODE === 'widget') (() => {
   async function viewConnect(sid) {
     cue.win.size(540, 640);
     const s = await cue.sessions.get(sid); if (!s) return viewList();
-    view(shell(`<div class="body"><div class="connect"><h2>Connect call session</h2><p class="mute" style="margin:0 0 14px">Free cloud mode — it ends when you stop it.</p>
+    view(shell(`<div class="body"><div class="connect"><h2>Connect call session</h2><p class="mute" style="margin:0 0 14px">The session runs until you end it.</p>
       <div id="chk"></div>
       <div class="note warn">${ic('headphones', 16)}<div>To hear the other side of the call, ${BRAND.name} captures your computer's audio. Windows works out of the box. On macOS you need a loopback device such as BlackHole; without it ${BRAND.name} only hears your microphone.</div></div>
-      <div class="note">${ic('shield-check', 16)}<div>Test in a safe environment before the real call. Speech and questions are sent to Groq (and Deepgram if enabled) to transcribe and answer; your sessions and files stay on this computer.</div></div>
+      <div class="note">${ic('shield-check', 16)}<div>Test in a safe environment before the real call. Speech goes to your caption engine and questions (with your resume/JD as context) to your answer engine; sessions and files stay on this computer.</div></div>
       <div class="row" style="margin-top:6px"><button class="btn ghost grow" id="back">Back</button><button class="btn primary grow" id="go">${ic('power', 15)}Connect</button></div></div></div>`)); bindHeader();
     setupPanel($('#chk'), s.language);
     $('#back').onclick = viewList; $('#go').onclick = () => viewLive(sid);
@@ -254,11 +254,11 @@ if (MODE === 'widget') (() => {
     const onInterim = (who, text) => { interim[who] = text; refreshLine(); };
 
     // --- audio: free local Whisper by default; Deepgram only if the user chose it and added a key ---
-    const key = S.stt === 'deepgram' ? await cue.deepgramKey() : ''; // Deepgram = live captions; otherwise Groq Whisper per sentence
+    const key = await cue.deepgramKey(); // Deepgram = live word-by-word captions; otherwise Groq Whisper per sentence
     const makeChannel = (label) => (key ? new Channel(label, onLine, onInterim, s.language, key) : new SegmentChannel(label, onLine, onInterim, s.language));
     (async () => {
       try {
-        if (!key && !S.groqKey) throw new Error('add your free Groq key in Setup (⋮ menu)');
+        if (!key && !S.groqKey) throw new Error('add a Deepgram key (live captions) in Settings (⋮ menu)');
         const m = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
         const c1 = makeChannel('You'); c1.onPerf = (p) => (perf.stt = p.stt); await c1.start(m); channels.push(c1); $('#dMic')?.classList.add('on');
         try {
@@ -352,7 +352,7 @@ if (MODE === 'widget') (() => {
   // ---------------- settings ----------------
   async function viewSettings() {
     cue.win.size(560, 760); S = await cue.settings.get();
-    view(shell(`<div class="body"><h2 style="margin:4px 0 2px;letter-spacing:-.02em">Setup &amp; Settings</h2><p class="mute" style="margin:0 0 14px">Fast cloud mode: answers and transcription run on Groq's free tier. Nothing heavy runs on your Mac.</p>
+    view(shell(`<div class="body"><h2 style="margin:4px 0 2px;letter-spacing:-.02em">Setup &amp; Settings</h2><p class="mute" style="margin:0 0 14px">Pick your AI engines. Nothing heavy runs on your Mac.</p>
       ${settingsFormHTML(S)}
       <div class="wizfoot"><button class="btn ghost" id="cancel">Back</button><button class="btn primary" id="save">Save</button></div></div>`)); bindHeader();
     const saveForm = bindSettingsForm(app, S);

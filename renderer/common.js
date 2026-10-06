@@ -34,13 +34,16 @@ function popMenu(anchor, html, onMount) {
 
 const LANGS = { en: 'English', es: 'Spanish', fr: 'French', de: 'German', hi: 'Hindi', pt: 'Portuguese', it: 'Italian', nl: 'Dutch', ja: 'Japanese', ko: 'Korean', zh: 'Chinese', ru: 'Russian' };
 // Free local AI is always first; cloud models only appear once an API key has been added (optional, future scope).
-// Groq models are always available (free tier); Claude appears once an Anthropic key is added.
-const GROQ_MODEL_LIST = [
-  { id: 'groq:openai/gpt-oss-120b', label: 'GPT-OSS 120B · best answers' }, { id: 'groq:llama-3.3-70b-versatile', label: 'Llama 3.3 70B · natural tone' },
-  { id: 'groq:openai/gpt-oss-20b', label: 'GPT-OSS 20B · fastest' }, { id: 'groq:llama-3.1-8b-instant', label: 'Llama 3.1 8B · highest daily limit' }];
-const DEFAULT_MODEL = GROQ_MODEL_LIST[0].id;
-const modelList = (S = {}) => GROQ_MODEL_LIST.concat(S.anthropicKey ? [
-  { id: 'anthropic:claude-sonnet-5-5', label: 'Claude Sonnet 5.5 (paid)' }, { id: 'anthropic:claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 (paid)' }] : []);
+// Answer models by provider. A provider's models are selectable once its key is added in Settings.
+const PROVIDERS = [
+  { id: 'openai', name: 'OpenAI', key: 'openaiKey', url: 'https://platform.openai.com/api-keys', note: 'paid, pay-per-use', models: [['gpt-5.6-luna', 'GPT-5.6 Luna · fast']] },
+  { id: 'gemini', name: 'Google Gemini', key: 'geminiKey', url: 'https://aistudio.google.com/apikey', note: 'free tier available (free-tier prompts may be used by Google to improve models)', models: [['gemini-3.5-flash-lite', 'Gemini 3.5 Flash-Lite · fastest'], ['gemini-3.8-flash', 'Gemini 3.8 Flash · smarter']] },
+  { id: 'anthropic', name: 'Anthropic Claude', key: 'anthropicKey', url: 'https://console.anthropic.com/settings/keys', note: 'paid, pay-per-use', models: [['claude-haiku-4-5-20251001', 'Claude Haiku 4.5 · fast'], ['claude-sonnet-5-5', 'Claude Sonnet 5.5 · best']] },
+  { id: 'groq', name: 'Groq', key: 'groqKey', url: 'https://console.groq.com/keys', note: 'free tier, open models', models: [['openai/gpt-oss-120b', 'GPT-OSS 120B'], ['llama-3.3-70b-versatile', 'Llama 3.3 70B'], ['openai/gpt-oss-20b', 'GPT-OSS 20B · fastest']] },
+];
+const modelList = (S = {}) => PROVIDERS.flatMap((p) => p.models.map(([id, label]) => ({ id: `${p.id}:${id}`, label: `${p.name} — ${label}`, disabled: !S[p.key] })));
+const modelOptions = (S, sel) => { const list = modelList(S); const cur = sel || S.defaultModel || (list.find((m) => !m.disabled) || {}).id || '';
+  return `<option value="">Default (${esc((list.find((m) => m.id === S.defaultModel) || {}).label || 'first engine with a key')})</option>` + list.map((m) => `<option value="${m.id}" ${m.id === sel ? 'selected' : ''} ${m.disabled ? 'disabled' : ''}>${esc(m.label)}${m.disabled ? ' (add key)' : ''}</option>`).join(''); };
 const brandHTML = () => `${mark(BRAND.mark, 22)}<span>${BRAND.name}</span>${BRAND.suffix ? `<span class="ai">${BRAND.suffix}</span>` : ''}`;
 
 // Live transcription over Deepgram's streaming API. One Channel per audio source.
@@ -64,48 +67,37 @@ class Channel {
 }
 
 // ---------- model/engine setup checklist (used on the Connect and Settings screens) ----------
-// ---------- engine setup checklist (Connect screen, Settings, dashboard) ----------
-async function setupPanel(host, _lang, onChange = () => {}) {
-  const st = await cue.setup.status();
-  const keyForm = (id, ph, link, linkLabel) => `<div class="row" style="margin-top:9px"><input id="${id}" type="password" placeholder="${ph}" style="height:32px" /><button class="btn sm primary" data-save="${id}" style="flex:none">Save</button></div><div class="acts"><button class="btn ghost sm" data-open="${link}">${ic('external-link', 14)}${linkLabel}</button></div>`;
-  const groqRow = !st.groq
-    ? `<div class="chk warn"><div class="st">${ic('zap', 16)}</div><div class="grow"><div class="t">Groq · answers + transcription</div><div class="s">Free key, about a minute: sign in at console.groq.com → <b>API Keys</b> → <b>Create API Key</b>, then paste it here.</div>${keyForm('gk', 'gsk_…', 'https://console.groq.com/keys', 'Get a free Groq key')}</div></div>`
-    : `<div class="chk" id="groqRow"><div class="st">${ic('loader-circle', 16, 'spin')}</div><div class="grow"><div class="t">Groq</div><div class="s">Checking your key…</div></div></div>`;
-  const sttRow = st.sttEngine === 'deepgram'
-    ? `<div class="chk" id="dgRow"><div class="st">${ic('loader-circle', 16, 'spin')}</div><div class="grow"><div class="t">Transcription · Deepgram</div><div class="s">Checking your key…</div></div></div>`
-    : `<div class="chk ${st.groq ? 'ok' : ''}"><div class="st">${ic(st.groq ? 'check' : 'audio-lines', 16)}</div><div class="grow"><div class="t">Transcription · Groq Whisper</div><div class="s">Uses the same Groq key. Text appears about a second after each sentence. For live word-by-word captions, add a Deepgram key under <b>More engines</b>.</div></div></div>`;
-  host.innerHTML = groqRow + sttRow;
-  const mark = (row, ok, title, msg) => { if (!row) return; row.className = 'chk ' + (ok ? 'ok' : 'warn'); row.querySelector('.st').innerHTML = ic(ok ? 'check' : 'circle-alert', 16); row.querySelector('.t').textContent = title; row.querySelector('.s').innerHTML = msg; };
-  if (st.groq) cue.setup.test('groq').then((r) => mark($('#groqRow', host), r.ok, r.ok ? 'Groq connected' : 'Groq key problem', r.ok ? 'Answers stream from Groq’s free tier — usually starting in about a second.' : `${esc(r.error)} <button class="btn ghost sm" data-a="regroq" style="margin-top:8px">Replace key</button>`));
-  if (st.sttEngine === 'deepgram') cue.setup.test('deepgram').then((r) => mark($('#dgRow', host), r.ok, r.ok ? 'Transcription · Deepgram (live captions)' : 'Deepgram key problem', r.ok ? 'Word-by-word live transcription.' : esc(r.error)));
-  host.onclick = async (e) => {
-    const t = e.target.closest('button'); if (!t) return;
-    if (t.dataset.open) cue.setup.open(t.dataset.open);
-    if (t.dataset.a === 'regroq') { await cue.settings.set({ groqKey: '' }); await setupPanel(host, _lang, onChange); }
-    if (t.dataset.save) {
-      const v = $('#' + t.dataset.save, host).value.trim(); if (!v) return toast('Paste the key first');
-      await cue.settings.set({ groqKey: v }); const r = await cue.setup.test('groq');
-      if (!r.ok) { toast(r.error, 6000); await cue.settings.set({ groqKey: '' }); return; }
-      toast('Groq connected'); await setupPanel(host, _lang, onChange); onChange();
-    }
-  };
+// ---------- engine status checklist (Connect screen, Settings, dashboard) ----------
+async function setupPanel(host) {
+  const st = await cue.setup.status(); const P = Object.fromEntries(PROVIDERS.map((p) => [p.id, p]));
+  const row = (id, icon, title, msg, cls = '') => `<div class="chk ${cls}" id="${id}"><div class="st">${ic(icon, 16, icon === 'loader-circle' ? 'spin' : '')}</div><div class="grow"><div class="t">${title}</div><div class="s">${msg}</div></div></div>`;
+  const answer = st.answer ? row('ansRow', 'loader-circle', `Answers · ${P[st.answer.provider].name}`, 'Checking your key…')
+    : row('ansRow', 'circle-alert', 'Answers · no AI key yet', 'Add an OpenAI, Google Gemini or Anthropic key below (or a free Groq key).', 'warn');
+  const caps = st.captions === 'deepgram' ? row('capRow', 'loader-circle', 'Live captions · Deepgram', 'Checking your key…')
+    : st.captions === 'groq' ? row('capRow', 'audio-lines', 'Captions · Groq Whisper (sentence by sentence)', 'For live word-by-word captions like Parakeet, add a Deepgram key below — new accounts get $200 free credit.', 'warn')
+      : row('capRow', 'circle-alert', 'Captions · no transcription key yet', 'Add a Deepgram key below for live word-by-word captions ($200 free credit).', 'warn');
+  host.innerHTML = answer + caps;
+  const mark = (sel, ok, title, msg) => { const r = $(sel, host); if (!r) return; r.className = 'chk ' + (ok ? 'ok' : 'warn'); r.querySelector('.st').innerHTML = ic(ok ? 'check' : 'circle-alert', 16); r.querySelector('.t').textContent = title; r.querySelector('.s').innerHTML = msg; };
+  if (st.answer) cue.setup.test(st.answer.provider).then((r) => mark('#ansRow', r.ok, `Answers · ${P[st.answer.provider].name}`, r.ok ? `Using <b>${esc(st.answer.name)}</b>. Change the default model below.` : esc(r.error)));
+  if (st.captions === 'deepgram') cue.setup.test('deepgram').then((r) => mark('#capRow', r.ok, 'Live captions · Deepgram Nova-3', r.ok ? 'Word-by-word live transcription of you and the other side.' : esc(r.error)));
   return st;
 }
-// Settings form shared by the widget and the dashboard.
+// Settings form shared by the widget and the dashboard: one key field per provider + default model.
 const settingsFormHTML = (S) => `<div id="chk"></div>
-  <details class="adv"><summary>${ic('layers', 16)}More engines (optional)${ic('chevron-down', 16)}</summary><div>
-    <label class="lbl">Default answer model</label><select id="groqModel">${GROQ_MODEL_LIST.map((m) => `<option value="${m.id.slice(5)}">${m.label}</option>`).join('')}</select>
-    <label class="lbl">Transcription engine</label><select id="stt"><option value="groq">Groq Whisper (free, ~1 s after each sentence)</option><option value="deepgram">Deepgram (live word-by-word, $200 free credit)</option></select>
-    <label class="lbl">Deepgram API key <small>(console.deepgram.com)</small></label><input id="deepgramKey" type="password" value="${esc(S.deepgramKey)}" />
-    <label class="lbl">Anthropic API key <small>(paid, optional)</small></label><input id="anthropicKey" type="password" value="${esc(S.anthropicKey)}" placeholder="sk-ant-…" />
-    <p class="mute" style="font-size:12px;margin:10px 0 0">Keys are encrypted with your OS keychain and only sent to that provider.</p></div></details>`;
+  <div class="sechd">Answer engines</div>
+  ${PROVIDERS.map((p) => `<label class="lbl" style="display:flex;align-items:center;gap:8px">${p.name} <small>(${p.note})</small><span class="grow"></span><button class="btn ghost sm" data-open="${p.url}" style="height:24px">${ic('external-link', 12)}Get key</button></label><input id="${p.key}" type="password" value="${esc(S[p.key])}" placeholder="Paste ${p.name} API key" />`).join('')}
+  <label class="lbl">Default answer model</label><select id="defaultModel"></select>
+  <div class="sechd">Live captions</div>
+  <label class="lbl" style="display:flex;align-items:center;gap:8px">Deepgram <small>(live word-by-word, $200 free credit)</small><span class="grow"></span><button class="btn ghost sm" data-open="https://console.deepgram.com/signup" style="height:24px">${ic('external-link', 12)}Get key</button></label><input id="deepgramKey" type="password" value="${esc(S.deepgramKey)}" placeholder="Paste Deepgram API key" />
+  <p class="mute" style="font-size:12px;margin:10px 0 0">Without Deepgram, captions use Groq Whisper (needs the Groq key) and appear after each sentence. Keys are encrypted with your OS keychain and only sent to that provider.</p>`;
 function bindSettingsForm(root, S) {
-  $('#groqModel', root).value = S.groqModel || 'openai/gpt-oss-120b'; $('#stt', root).value = S.stt === 'deepgram' ? 'deepgram' : 'groq';
-  setupPanel($('#chk', root));
+  const fill = () => { const sel = $('#defaultModel', root); const cur = S.defaultModel; sel.innerHTML = modelList(S).map((m) => `<option value="${m.id}" ${m.id === cur ? 'selected' : ''} ${m.disabled ? 'disabled' : ''}>${esc(m.label)}${m.disabled ? ' (add key)' : ''}</option>`).join(''); if (!cur || sel.selectedOptions[0]?.disabled) { const f = modelList(S).find((m) => !m.disabled); if (f) sel.value = f.id; } };
+  fill(); setupPanel($('#chk', root));
+  root.addEventListener('click', (e) => { const b = e.target.closest('[data-open]'); if (b) { e.preventDefault(); cue.setup.open(b.dataset.open); } });
+  PROVIDERS.forEach((p) => ($('#' + p.key, root).oninput = (e) => { S = { ...S, [p.key]: e.target.value }; fill(); }));
   return async () => {
-    const patch = {}; ['groqModel', 'stt', 'deepgramKey', 'anthropicKey'].forEach((k) => (patch[k] = $('#' + k, root).value));
-    if (patch.stt === 'deepgram' && !patch.deepgramKey) { patch.stt = 'groq'; toast('Add a Deepgram key to use Deepgram — keeping Groq Whisper', 4000); }
-    return cue.settings.set(patch);
+    const patch = { defaultModel: $('#defaultModel', root).value, deepgramKey: $('#deepgramKey', root).value }; PROVIDERS.forEach((p) => (patch[p.key] = $('#' + p.key, root).value));
+    const saved = await cue.settings.set(patch); await setupPanel($('#chk', root)); return saved;
   };
 }
 

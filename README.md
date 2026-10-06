@@ -1,6 +1,6 @@
 # Cue
 
-A private, self-hosted AI copilot for interviews and calls (Electron). Your data stays on your computer; API keys are encrypted with your OS keychain.
+A private, self-hosted AI calls (Electron). Your data stays on your computer; API keys are encrypted with your OS keychain.
 
 ## AI engines (v0.5)
 
@@ -53,17 +53,7 @@ Ctrl/⌘+Enter Answer · Ctrl/⌘+Shift+Enter Screenshot · Ctrl/⌘+Shift+Space
 ## Notes
 - macOS system audio needs a loopback device such as BlackHole; Windows works out of the box. Without it Cue hears your mic only.
 - Use a vision-capable Ollama model (e.g. llava) if you want screenshot analysis locally.
-- Not included on purpose: hiding the window from screen-share capture.
-- Not included: Headshots, referrals/subscription, cloud accounts.
 - Build installers: `npm run dist`.
-
-## Install as a Mac app (Desktop icon)
-
-```
-npm install
-npm run install-mac
-```
-This builds **Cue AI.app** (Apple Silicon), installs it in /Applications, and puts a **Cue AI** shortcut on your Desktop. The window is shown only once fully drawn (~0.6 s in testing).
 
 ## Window controls
 - **Move:** click the move icon to pick one of 6 screen positions (top/bottom × left/center/right), or press **⌘ ⇧ + arrow keys** anywhere while Cue is visible.
@@ -93,4 +83,3 @@ Known trade-offs of the free setup: Gemini's free-tier limits are unpublished (s
 **Product:**
 - Fully offline mode (local models) — parked: too slow on a 16 GB fanless laptop (30–45 s per answer in testing).
 - Mac audio setup guide (BlackHole) built into the Connect screen.
-- Behaviours to match Parakeet more closely once observed: Auto Generate trigger rules, screenshot flow, Answer Preferences options, meeting detection, session inactivity end.

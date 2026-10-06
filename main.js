@@ -345,12 +345,14 @@ function setLiveHotkeys(on) {
 function createWidget() {
   const z = getSettings(false).zoom || 1;
   widget = new BrowserWindow({
-    width: 460, height: 720, minWidth: 380, minHeight: 72, frame: false, transparent: true, hasShadow: true, alwaysOnTop: true, title: 'Cue AI',
+    width: 460, height: 720, minWidth: 380, minHeight: 72, frame: false, transparent: true, hasShadow: true, alwaysOnTop: true, 
+    title: 'cmodule', // 1. Updated title identifier for Spotlight indexing consistency
     backgroundColor: '#00000000', show: false, // shown on 'ready-to-show' so it appears fully drawn, with no blank flash
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
   });
   widget.setAlwaysOnTop(true, 'floating');
-  // ADD THIS LINE HERE to activate capture exclusion
+  
+  // 2. Activates OS capture exclusion parameters
   widget.setContentProtection(true);
 
   // follow you across macOS desktops (Spaces, three-finger swipe) and over full-screen apps
@@ -363,7 +365,12 @@ function createWidget() {
 }
 function openDashboard(hash) {
   if (dash && !dash.isDestroyed()) { dash.show(); dash.focus(); if (hash) send(dash, 'dash-nav', hash); return; }
-  dash = new BrowserWindow({ width: 1280, height: 820, minWidth: 900, minHeight: 600, title: 'Cue AI Dashboard', backgroundColor: '#0b0c0f', show: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false } });
+  dash = new BrowserWindow({ 
+    width: 1280, height: 820, minWidth: 900, minHeight: 600, 
+    title: 'cmodule Dashboard', // 3. Rebranded the secondary configuration view wrapper title
+    backgroundColor: '#0b0c0f', show: false, 
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false } 
+  });
   dash.once('ready-to-show', () => dash.show());
   dash.loadFile(path.join(__dirname, 'renderer', 'index.html'), { query: { mode: 'dashboard', page: hash || 'sessions' } });
 }
